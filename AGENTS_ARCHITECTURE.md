@@ -13,33 +13,33 @@ To guarantee mathematical precision, deterministic verification, and enterprise 
 
 ```mermaid
 graph TD
-    User([Developer / Enterprise Architect]) -->|Repo Path / Git URL| Supervisor[Supervisor Orchestrator Agent]
+    User([Developer / Enterprise Architect]) -->|"Repo Path / Git URL"| Supervisor[Supervisor Orchestrator Agent]
     
-    subgraph Multi-Agent Engine Core (Blackboard Architecture)
-        Supervisor <-->|Shared State & Context| Blackboard[(Central Context State Store)]
+    subgraph CoreEngine ["Multi-Agent Engine Core (Blackboard Architecture)"]
+        Supervisor <-->|"Shared State & Context"| Blackboard[("Central Context State Store")]
         
-        Supervisor -->|Phase 1: Code Topology & Graph| ArchAgent[1. Architect Agent]
-        ArchAgent -->|AST Graph & Domain Clusters| Blackboard
+        Supervisor -->|"Phase 1: Code Topology & Graph"| ArchAgent[1. Architect Agent]
+        ArchAgent -->|"AST Graph & Domain Clusters"| Blackboard
         
-        Supervisor -->|Phase 2: Relational State & Sagas| DataAgent[2. Data Agent - DataSplit Engine]
-        DataAgent -->|Partitioned Schemas, Sagas & CQRS| Blackboard
+        Supervisor -->|"Phase 2: Relational State & Sagas"| DataAgent[2. Data Agent - DataSplit Engine]
+        DataAgent -->|"Partitioned Schemas, Sagas & CQRS"| Blackboard
         
-        Supervisor -->|Phase 3: Protocols & Security| ContractAgent[3. Contract Agent]
-        ContractAgent -->|OpenAPI 3.0, gRPC Protos, JWTs| Blackboard
+        Supervisor -->|"Phase 3: Protocols & Security"| ContractAgent[3. Contract Agent]
+        ContractAgent -->|"OpenAPI 3.0, gRPC Protos, JWTs"| Blackboard
         
-        Supervisor -->|Phase 4: Incremental Gateway| StranglerAgent[4. Strangler Fig & Gateway Agent]
-        StranglerAgent -->|Envoy / Kong Canary Routing Rules| Blackboard
+        Supervisor -->|"Phase 4: Incremental Gateway"| StranglerAgent[4. Strangler Fig & Gateway Agent]
+        StranglerAgent -->|"Envoy / Kong Canary Routing Rules"| Blackboard
         
-        Supervisor -->|Phase 5: Differential Parity| TestAgent[5. Test & Parity Agent]
-        TestAgent <-->|Auto-Healing Feedback Loop| DataAgent
-        TestAgent -->|Parity Verification Report| Blackboard
+        Supervisor -->|"Phase 5: Differential Parity"| TestAgent[5. Test & Parity Agent]
+        TestAgent <-->|"Auto-Healing Feedback Loop"| DataAgent
+        TestAgent -->|"Parity Verification Report"| Blackboard
         
-        Supervisor -->|Phase 6: Cryptographic Attestation| PassportAgent[6. Governance & Passport Agent]
-        PassportAgent -->|Signed in-toto DSSE Migration Passport| Blackboard
+        Supervisor -->|"Phase 6: Cryptographic Attestation"| PassportAgent[6. Governance & Passport Agent]
+        PassportAgent -->|"Signed in-toto DSSE Migration Passport"| Blackboard
     end
     
-    Blackboard -->|Stream Live Telemetry| WebUI[Interactive D3 Untangling Dashboard]
-    Blackboard -->|Deploy Artifacts| CloudTarget[Docker Compose / Red Hat OpenShift]
+    Blackboard -->|"Stream Live Telemetry"| WebUI[Interactive D3 Untangling Dashboard]
+    Blackboard -->|"Deploy Artifacts"| CloudTarget[Docker Compose / Red Hat OpenShift]
 ```
 
 ---
@@ -170,9 +170,9 @@ graph TD
   ```mermaid
   graph LR
       Client([Client Request]) --> Gateway[Envoy API Gateway]
-      Gateway -->|90% Canary Route| Monolith[Legacy Monolith Server]
-      Gateway -->|10% Canary Route| Microservice[New FastAPI Order Service]
-      Microservice -.->|Health & Telemetry| Gateway
+      Gateway -->|"90% Canary Route"| Monolith[Legacy Monolith Server]
+      Gateway -->|"10% Canary Route"| Microservice[New FastAPI Order Service]
+      Microservice -.->|"Health & Telemetry"| Gateway
   ```
 
 ---
