@@ -1,0 +1,2 @@
+[console_scripts]
+reposplit = reposplit.cli:app

@@ -1,0 +1,15 @@
+# OpenShift Route exposing the strangler-fig gateway. Clients never see the monolith/service split.
+{{ '{{- if .Values.gateway.enabled }}' }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ release }}-gateway
+spec:
+  to:
+    kind: Service
+    name: gateway
+  port:
+    targetPort: {{ '{{ .Values.gateway.port }}' }}
+  tls:
+    termination: edge
+{{ '{{- end }}' }}

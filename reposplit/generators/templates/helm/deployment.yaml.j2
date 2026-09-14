@@ -1,0 +1,55 @@
+{{ '{{- range .Values.services }}' }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ '{{ .name }}' }}
+  labels:
+    app: {{ '{{ .name }}' }}
+    app.kubernetes.io/part-of: {{ release }}
+spec:
+  replicas: {{ '{{ .replicas }}' }}
+  selector:
+    matchLabels:
+      app: {{ '{{ .name }}' }}
+  template:
+    metadata:
+      labels:
+        app: {{ '{{ .name }}' }}
+    spec:
+      containers:
+        - name: {{ '{{ .name }}' }}
+          image: {{ '{{ $.Values.image.registry }}/{{ .name }}:{{ $.Values.image.tag }}' }}
+          ports:
+            - containerPort: {{ '{{ .port }}' }}
+          env:
+            - name: PORT
+              value: {{ '"{{ .port }}"' }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ '{{ $.Values.otel.endpoint }}' }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ '{{ .name }}' }}
+            {{ '{{- range $k, $v := .env }}' }}
+            - name: {{ '{{ $k }}' }}
+              value: {{ '{{ $v | quote }}' }}
+            {{ '{{- end }}' }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ '{{ .port }}' }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ '{{ .port }}' }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ '{{ .name }}' }}
+spec:
+  selector:
+    app: {{ '{{ .name }}' }}
+  ports:
+    - port: {{ '{{ .port }}' }}
+      targetPort: {{ '{{ .port }}' }}
+{{ '{{- end }}' }}

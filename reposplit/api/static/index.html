@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>RepoSplit 2.0 - Untangling Dashboard (reference client)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root { --bg:#0b1020; --panel:#121a2f; --ink:#e8ecf5; --muted:#8a96b3; --accent:#4f8cff; --ok:#3ddc97; --warn:#ffb454; --err:#ff5d5d; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display:flex; align-items:center; gap:16px; padding:14px 20px; border-bottom:1px solid #1f2a47; }
+  header h1 { font-size:16px; margin:0; letter-spacing:.3px; }
+  header input { background:var(--panel); border:1px solid #2a3557; color:var(--ink); padding:8px 10px; border-radius:6px; width:360px; }
+  header button { background:var(--accent); color:#fff; border:0; padding:8px 14px; border-radius:6px; cursor:pointer; }
+  header button.secondary { background:#2a3557; }
+  main { display:grid; grid-template-columns: 1fr 420px; height: calc(100vh - 57px); }
+  #graph { position:relative; }
+  svg { width:100%; height:100%; display:block; }
+  aside { border-left:1px solid #1f2a47; display:flex; flex-direction:column; min-height:0; }
+  .phases { display:flex; flex-wrap:wrap; gap:6px; padding:12px; border-bottom:1px solid #1f2a47; }
+  .phase { padding:4px 8px; border-radius:999px; background:#1b2540; color:var(--muted); font-size:12px; }
+  .phase.active { background:var(--accent); color:#fff; }
+  .phase.done { background:#16402f; color:var(--ok); }
+  #log { flex:1; overflow:auto; padding:10px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; }
+  .ev { padding:3px 0; border-bottom:1px dashed #1b2540; white-space:pre-wrap; }
+  .ev .agent { color:var(--accent); }
+  .ev.warning { color:var(--warn); } .ev.error { color:var(--err); } .ev.success { color:var(--ok); }
+  .legend { position:absolute; left:12px; bottom:12px; background:rgba(18,26,47,.9); padding:8px 10px; border-radius:8px; font-size:12px; }
+  .legend span { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
+  #approve { display:none; margin:10px 12px; background:var(--warn); color:#000; border:0; padding:8px; border-radius:6px; cursor:pointer; }
+</style>
+</head>
+<body>
+<header>
+  <h1>RepoSplit 2.0 &middot; Untangling Dashboard</h1>
+  <input id="repo" value="examples/shop_monolith" placeholder="repo path" />
+  <label><input type="checkbox" id="live" /> live parity</label>
+  <button id="start">Run</button>
+  <button id="untangle" class="secondary" disabled>Untangle</button>
+  <span id="status" style="color:var(--muted)"></span>
+</header>
+<main>
+  <div id="graph"><svg></svg><div class="legend" id="legend"></div></div>
+  <aside>
+    <div class="phases" id="phases"></div>
+    <button id="approve">Approve scaffolding (human oversight gate)</button>
+    <div id="log"></div>
+  </aside>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script>
+const PHASES = ["INGEST","ARCHITECT","DATA","CONTRACT","STRANGLER","SCAFFOLD","PARITY","GOVERNANCE","COMPLETE"];
+const color = d3.scaleOrdinal(d3.schemeTableau10);
+let runId = null, sim = null, untangled = false, graphData = null;
+
+const phasesEl = document.getElementById("phases");
+PHASES.forEach(p => { const s = document.createElement("span"); s.className = "phase"; s.id = "ph-" + p; s.textContent = p; phasesEl.appendChild(s); });
+
+function setPhase(phase) {
+  let passed = true;
+  PHASES.forEach(p => { const el = document.getElementById("ph-" + p); el.className = "phase" + (p === phase ? " active" : passed ? " done" : ""); if (p === phase) passed = false; });
+}
+
+function log(ev) {
+  const div = document.createElement("div");
+  div.className = "ev " + ev.level;
+  div.innerHTML = `<span class="agent">[${ev.agent}]</span> ${ev.message}`;
+  const logEl = document.getElementById("log");
+  logEl.appendChild(div); logEl.scrollTop = logEl.scrollHeight;
+  setPhase(ev.phase);
+  if (ev.payload && ev.payload.approval_required) document.getElementById("approve").style.display = "block";
+  if (ev.agent === "architect" && ev.message.startsWith("parsed")) loadGraph(false);
+  if (ev.agent === "architect" && ev.level === "success") { loadGraph(true); document.getElementById("untangle").disabled = false; }
+}
+
+async function loadGraph(withClusters) {
+  const res = await fetch(`/api/runs/${runId}/graph`);
+  if (!res.ok) return;
+  graphData = await res.json();
+  draw(withClusters);
+}
+
+function draw(withClusters) {
+  const svg = d3.select("svg"); svg.selectAll("*").remove();
+  const { width, height } = svg.node().getBoundingClientRect();
+  const nodes = graphData.nodes.map(d => ({ ...d }));
+  const links = graphData.edges.map(d => ({ ...d }));
+  const clusters = graphData.clusters;
+  const legend = document.getElementById("legend");
+  legend.innerHTML = clusters.map(c => `<div><span style="background:${color(c)}"></span>${c}</div>`).join("");
+  const cx = d3.scalePoint().domain(clusters).range([width * 0.15, width * 0.85]);
+
+  const link = svg.append("g").selectAll("line").data(links).join("line")
+    .attr("stroke", d => d.severed && untangled ? "#ff5d5d" : "#2a3557")
+    .attr("stroke-dasharray", d => d.severed && untangled ? "4 3" : null)
+    .attr("stroke-width", d => Math.min(4, 0.8 + d.weight * 0.4));
+  const node = svg.append("g").selectAll("circle").data(nodes).join("circle")
+    .attr("r", d => d.is_model ? 9 : d.route ? 7 : 5)
+    .attr("fill", d => untangled ? color(d.cluster) : "#8a96b3")
+    .attr("stroke", d => d.is_model ? "#fff" : "none").attr("stroke-width", 1.5)
+    .call(d3.drag().on("start", (e, d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on("drag", (e, d) => { d.fx = e.x; d.fy = e.y; })
+      .on("end", (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }));
+  node.append("title").text(d => `${d.id}\ncluster: ${d.cluster}${d.route ? "\nroute: " + d.route : ""}`);
+  const label = svg.append("g").selectAll("text").data(nodes).join("text").text(d => d.name)
+    .attr("font-size", 10).attr("fill", "#c8d0e6").attr("dx", 8).attr("dy", 3);
+
+  sim = d3.forceSimulation(nodes)
+    .force("link", d3.forceLink(links).id(d => d.id).distance(d => d.severed && untangled ? 160 : 40).strength(d => d.severed && untangled ? 0.05 : 0.6))
+    .force("charge", d3.forceManyBody().strength(-160))
+    .force("center", d3.forceCenter(width / 2, height / 2))
+    .force("x", d3.forceX(d => untangled ? cx(d.cluster) : width / 2).strength(untangled ? 0.35 : 0.02))
+    .force("y", d3.forceY(height / 2).strength(0.05))
+    .on("tick", () => {
+      link.attr("x1", d => d.source.x).attr("y1", d => d.source.y).attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+      node.attr("cx", d => d.x).attr("cy", d => d.y);
+      label.attr("x", d => d.x).attr("y", d => d.y);
+    });
+}
+
+document.getElementById("untangle").onclick = () => { untangled = !untangled; draw(untangled); };
+document.getElementById("approve").onclick = async () => { await fetch(`/api/runs/${runId}/approve`, { method: "POST" }); document.getElementById("approve").style.display = "none"; };
+document.getElementById("start").onclick = async () => {
+  const res = await fetch("/api/runs", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ repo_path: document.getElementById("repo").value, live: document.getElementById("live").checked, require_approval: true }) });
+  const data = await res.json();
+  if (!res.ok) { document.getElementById("status").textContent = data.detail; return; }
+  runId = data.run_id; untangled = false;
+  document.getElementById("status").textContent = "run " + runId;
+  document.getElementById("log").innerHTML = "";
+  const es = new EventSource(`/api/runs/${runId}/events`);
+  es.addEventListener("telemetry", e => log(JSON.parse(e.data)));
+  es.addEventListener("end", () => { es.close(); document.getElementById("status").textContent += " - finished"; });
+};
+</script>
+</body>
+</html>

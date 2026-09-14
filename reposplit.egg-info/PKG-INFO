@@ -1,0 +1,40 @@
+Metadata-Version: 2.4
+Name: reposplit
+Version: 2.0.0a1
+Summary: RepoSplit 2.0 - Hierarchical Orchestrated Multi-Agent System (HOMAS) for monolith-to-microservice modernization
+Author: RepoSplit Team
+License: Apache-2.0
+Project-URL: Homepage, https://github.com/your-org/reposplit-multi-agent
+Keywords: microservices,modernization,multi-agent,ibm-bob,ast,saga,strangler-fig
+Classifier: Development Status :: 3 - Alpha
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Framework :: FastAPI
+Classifier: Topic :: Software Development :: Code Generators
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: pydantic>=2.7
+Requires-Dist: networkx>=3.2
+Requires-Dist: jinja2>=3.1
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: httpx>=0.27
+Requires-Dist: typer>=0.12
+Requires-Dist: rich>=13.7
+Requires-Dist: cryptography>=42
+Requires-Dist: fastapi>=0.111
+Requires-Dist: uvicorn[standard]>=0.29
+Provides-Extra: anthropic
+Requires-Dist: anthropic>=1.0; extra == "anthropic"
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23; extra == "dev"
+Requires-Dist: ruff>=0.5; extra == "dev"
+Requires-Dist: flask>=3.0; extra == "dev"
+Requires-Dist: flask-sqlalchemy>=3.1; extra == "dev"
+Requires-Dist: sqlalchemy>=2.0; extra == "dev"
+Provides-Extra: all
+Requires-Dist: reposplit[anthropic,dev]; extra == "all"
+Dynamic: license-file
