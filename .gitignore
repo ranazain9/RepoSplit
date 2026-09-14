@@ -1,26 +1,194 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-build/
-dist/
-.venv/
-venv/
-.pytest_cache/
-.ruff_cache/
+# ==============================================================================
+# RepoSplit 2.0 Git Ignore Configuration
+# ==============================================================================
 
-# RepoSplit run outputs
-out/
-.reposplit/
-*.sqlite
-*.db
+# ------------------------------------------------------------------------------
+# Operating System & Temporary Files
+# ------------------------------------------------------------------------------
+# Microsoft Office Temporary Lock Files
+~$*.docx
+~$*.xlsx
+~$*.pptx
+~$*.doc
+
+# Windows OS metadata
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# macOS metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux metadata
+*~
+.directory
+
+# ------------------------------------------------------------------------------
+# Environment Variables, Secrets & Keys
+# ------------------------------------------------------------------------------
+.env
+.env.local
+.env.*.local
+*.env
+*.pem
+*.key
+*.cert
+*.crt
+id_rsa
+id_rsa.pub
+secrets/
+credentials.json
+service-account*.json
 keys/
 
-# Secrets
-.env
+# NOTE: Do NOT ignore .env.example
+!.env.example
 
-# Editors / OS
-.vscode/
+# ------------------------------------------------------------------------------
+# Python Runtime & Virtual Environments
+# ------------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+.Python
+
+# Distribution, Packaging & Builds
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Testing, Coverage & Type Checking
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+cython_debug/
+
+# Jupyter Notebooks Checkpoints
+.ipynb_checkpoints/
+
+# ------------------------------------------------------------------------------
+# JavaScript, TypeScript & Frontend (React / Vite / Next.js)
+# ------------------------------------------------------------------------------
+node_modules/
+jspm_packages/
+.pnp
+.pnp.js
+.npm
+
+# Production build outputs
+.next/
+out/
+.reposplit/
+.docusaurus/
+.vuepress/dist
+.serverless/
+.fusebox/
+.dynamodb/
+.turbo
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ------------------------------------------------------------------------------
+# Databases, Caches & Runtime Logs
+# ------------------------------------------------------------------------------
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+dump.rdb
+
+# Application logs
+*.log
+logs/
+*.pid
+
+# ------------------------------------------------------------------------------
+# IDEs & Code Editors
+# ------------------------------------------------------------------------------
+# Visual Studio Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# JetBrains (PyCharm, WebStorm, etc.)
 .idea/
-.DS_Store
-Thumbs.db
+*.iml
+*.iws
+
+# Sublime Text & Vim
+*.sublime-project
+*.sublime-workspace
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+
+# ------------------------------------------------------------------------------
+# Docker, Containers & Kubernetes
+# ------------------------------------------------------------------------------
+.docker/
+*.tar.gz
+*.tar
+
+# ------------------------------------------------------------------------------
+# Temporary Scratch & Output Folders
+# ------------------------------------------------------------------------------
+tmp/
+temp/
+scratch/
+output_test/
