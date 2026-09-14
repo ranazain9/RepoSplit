@@ -12,6 +12,24 @@ Developer ──► Supervisor Orchestrator ──► Blackboard (shared state +
    AST+Louvain     FK sever      OpenAPI/gRPC   Envoy canary   FastAPI svcs   diff+patch      in-toto DSSE
 ```
 
+## ▶️ Demo — click here
+
+**[Open the live demo → http://127.0.0.1:8765](http://127.0.0.1:8765)** (start it first with the two commands below)
+
+```bash
+pip install -e ".[all]"
+reposplit serve
+```
+
+Then in the dashboard: **Run** → **Untangle** (graph splits into 4 services, severed edges in red) →
+**Approve scaffolding** (human-oversight gate) → watch the live parity results stream in.
+Tick **live parity** before **Run** to boot the monolith + generated services as real processes.
+
+Terminal-only version (no browser): `reposplit run examples/shop_monolith --provider mock --yes --live`
+followed by `reposplit verify out/reports/migration_passport.json`. Full 3-minute script: [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md).
+
+---
+
 **Status:** working vertical slice, hackathon scaffold. Everything in the DAG runs end to end
 against the bundled `examples/shop_monolith` benchmark, offline (mock LLM) or with Claude /
 watsonx. Extension points are marked `TODO(team)` in the code. See [CONTRIBUTING.md](CONTRIBUTING.md).
