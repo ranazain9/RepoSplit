@@ -40,6 +40,13 @@ def _setup_logging(verbose: bool) -> None:
 
 @app.callback()
 def _root(version: bool = typer.Option(False, "--version", help="print version and exit")) -> None:
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+    except ImportError:
+        pass
+
     if version:
         console.print(f"reposplit {__version__}")
         raise typer.Exit()
@@ -49,7 +56,7 @@ def _root(version: bool = typer.Option(False, "--version", help="print version a
 def run(
     repo: Path = typer.Argument(..., exists=True, file_okay=False, help="path to the monolith repository"),
     out: Path = typer.Option(Path("out"), "--out", "-o", help="output directory for generated artifacts"),
-    provider: str = typer.Option("auto", help="auto | mock | anthropic | watsonx"),
+    provider: str = typer.Option("auto", help="auto | mock | anthropic | watsonx | groq"),
     model: str | None = typer.Option(None, help="model id override (e.g. claude-opus-5)"),
     mode: str = typer.Option("full", help="full | strangler"),
     service: list[str] = typer.Option([], "--service", "-s", help="strangler mode: cluster(s) to extract"),
@@ -64,8 +71,11 @@ def run(
     strict_llm: bool = typer.Option(False, help="fail the run instead of falling back to deterministic defaults"),
     uuid_refs: bool = typer.Option(False, help="sever FKs to String(36) UUID soft references"),
     signing_key: Path | None = typer.Option(None, help="Ed25519 PEM for the Migration Passport (ephemeral if omitted)"),
+    topology_override: Path | None = typer.Option(None, "--topology-override", help="path to JSON file with manual symbol/file -> cluster overrides"),
     seed: int = typer.Option(42, help="deterministic seed for Louvain / payload synthesis"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
+    resume: bool = typer.Option(False, "--resume", "-r", help="resume from the last saved blackboard snapshot in --out"),
+    gateway: str = typer.Option("envoy", help="gateway config to generate: envoy | kong | both"),
 ) -> None:
     """Run the full multi-agent modernization pipeline."""
     _setup_logging(verbose)
@@ -87,11 +97,21 @@ def run(
         strict_llm=strict_llm,
         uuid_refs=uuid_refs,
         signing_key_path=str(signing_key) if signing_key else None,
+        topology_override=str(topology_override) if topology_override else None,
         seed=seed,
+        gateway=gateway,  # type: ignore[arg-type]
     )
     from reposplit.core.supervisor import Supervisor
 
-    supervisor = Supervisor(config)
+    if resume:
+        snapshot = out / ".reposplit" / "blackboard.json"
+        if not snapshot.exists():
+            console.print(f"[red]No snapshot found at {snapshot}. Run without --resume first.[/]")
+            raise typer.Exit(code=1)
+        console.print(f"[bold cyan]Resuming run from snapshot:[/] {snapshot}")
+        supervisor = Supervisor.from_snapshot(snapshot, config)
+    else:
+        supervisor = Supervisor(config)
     if config.require_approval:
         # CLI approval: ask once the STRANGLER phase is done. Interactive terminals only.
         async def _cli_approval() -> None:
@@ -189,19 +209,26 @@ def parity(
 def verify(
     passport: Path = typer.Argument(Path("out/reports/migration_passport.json"), exists=True),
     check_artifacts: bool = typer.Option(True, help="re-hash subjects under the passport's output dir"),
+    key: Path | None = typer.Option(None, "--key", "-k", help="trusted Ed25519 public key (.pub or .pem)"),
+    did: str | None = typer.Option(None, "--did", help="expected signer did:key string"),
+    artifacts_dir: Path | None = typer.Option(None, "--artifacts-dir", "-d", help="base output dir for subject artifacts"),
 ) -> None:
     """Verify a Migration Passport's DSSE signature and artifact digests."""
     from reposplit.agents.governance.attestation import load_passport, verify_passport, verify_subjects
 
     p = load_passport(passport)
-    ok, problems = verify_passport(p)
+    ok, problems = verify_passport(p, trusted_key=key, trusted_did=did)
     pred = p.statement.predicate
     console.print(f"signer   : {p.signer_did}")
     console.print(f"engine   : {pred.get('modernizationEngine')} v{pred.get('engineVersion')} run {pred.get('runId')}")
     console.print(f"source   : tree sha256 {pred.get('source', {}).get('treeSha256')}")
     console.print(f"parity   : {pred.get('parityTestVerification', {}).get('passRate')} ({pred.get('parityTestVerification', {}).get('mode')})")
     console.print(f"prompts  : {len(pred.get('modelProvenance', {}).get('prompts', []))} hashed, {pred.get('modelProvenance', {}).get('llmDecisions')} by LLM")
-    drift = verify_subjects(p, passport.parent.parent) if check_artifacts else []
+    if "finOpsRoi" in pred:
+        fo = pred["finOpsRoi"]
+        console.print(f"finops   : ${fo.get('annualSavingsUsd', 0):,.0f}/yr savings ({fo.get('savingsPercent')}), {fo.get('roiMultiple')} ROI, -{fo.get('carbonReductionKgYr', 0):.0f}kg CO2e")
+    base_dir = artifacts_dir or passport.parent.parent
+    drift = verify_subjects(p, base_dir) if check_artifacts else []
     if ok and not drift:
         console.print("[bold green]signature valid, artifacts match attestation[/]")
         raise typer.Exit(code=0)

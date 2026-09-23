@@ -55,6 +55,7 @@ class Keys:
     SCAFFOLD_MANIFEST = "scaffold.manifest"
     PARITY_REPORT = "parity.report"
     PASSPORT = "governance.passport"
+    FINOPS_REPORT = "governance.finops_report"
     ARTIFACTS = "run.artifacts"
     PROMPTS = "run.prompts"
     APPROVALS = "run.approvals"
@@ -63,7 +64,7 @@ class Keys:
 class RunConfig(BaseModel):
     repo_path: str
     output_dir: str = "out"
-    provider: Literal["auto", "mock", "anthropic", "watsonx"] = "auto"
+    provider: Literal["auto", "mock", "anthropic", "watsonx", "groq"] = "auto"
     model: str | None = None
     mode: Literal["full", "strangler"] = "full"
     target_services: list[str] = Field(default_factory=list, description="strangler mode: clusters to extract")
@@ -80,6 +81,9 @@ class RunConfig(BaseModel):
     strict_llm: bool = False
     signing_key_path: str | None = None
     uuid_refs: bool = Field(False, description="Sever FKs to String(36) UUID refs instead of keeping the column type")
+    topology_override: str | None = Field(None, description="Path to JSON file with manual symbol/file -> cluster overrides")
+    manual_assignments: dict[str, str] = Field(default_factory=dict, description="In-memory symbol/file -> cluster overrides")
+    gateway: Literal["envoy", "kong", "both"] = Field("envoy", description="Gateway config to generate: envoy, kong, or both")
 
 
 class TelemetryEvent(BaseModel):
@@ -147,6 +151,9 @@ class RouteInfo(BaseModel):
     path: str
     methods: list[str] = Field(default_factory=lambda: ["GET"])
     blueprint: str | None = None
+    response_fields: list[str] = Field(default_factory=list, description="Response body fields extracted from return AST")
+    status_codes: list[int] = Field(default_factory=list, description="HTTP status codes returned")
+    operation_kind: str = Field("READ", description="READ | MUTATING | IDEMPOTENT")
 
 
 class GraphNode(BaseModel):
@@ -170,7 +177,7 @@ class GraphNode(BaseModel):
 class GraphEdge(BaseModel):
     source: str
     target: str
-    kind: Literal["import", "call", "data_access", "inherits", "fk"]
+    kind: Literal["import", "call", "data_access", "inherits", "fk", "transaction"]
     weight: int = 1
 
 
@@ -195,9 +202,9 @@ class CouplingMetrics(BaseModel):
 class Cluster(BaseModel):
     name: str
     kind: Literal["service", "shared_kernel"] = "service"
-    files: list[str]
-    symbols: list[str]
-    metrics: CouplingMetrics
+    files: list[str] = Field(default_factory=list)
+    symbols: list[str] = Field(default_factory=list)
+    metrics: CouplingMetrics = Field(default_factory=CouplingMetrics)
     loc: int = 0
     extract: bool = True
     rationale: str = ""
@@ -228,6 +235,7 @@ class DomainTopology(BaseModel):
     severed_coupling: float = 0.0
     risk_level: RiskLevel = RiskLevel.LOW
     rationale: str = ""
+    human_override: bool = False
 
     def service_clusters(self) -> dict[str, Cluster]:
         return {k: v for k, v in self.clusters.items() if v.kind == "service" and v.extract}
@@ -237,6 +245,21 @@ class DomainTopology(BaseModel):
             if symbol in c.symbols:
                 return name
         return None
+
+
+class TopologyPreviewRequest(BaseModel):
+    assignments: dict[str, str] = Field(..., description="Map of symbol or module -> target cluster name")
+
+
+class TopologyPreviewResponse(BaseModel):
+    clusters: dict[str, list[str]]
+    initial_coupling: float
+    severed_coupling: float
+    coupling_reduction_pct: float
+    severed_edges_count: int
+    risk_level: RiskLevel
+    cycles_count: int
+    cycles: list[DependencyCycle] = Field(default_factory=list)
 
 
 class ClusterAssignment(BaseModel):
@@ -265,6 +288,7 @@ class ColumnSpec(BaseModel):
     primary_key: bool = False
     nullable: bool = True
     foreign_key: str | None = Field(None, description="'table.column' if this column carries a FK")
+    ondelete: str | None = Field(None, description="CASCADE, SET NULL, RESTRICT, etc.")
     source: str = Field("", description="original source line")
 
 
@@ -288,6 +312,7 @@ class ForeignKeySeverance(BaseModel):
     before: str
     after: str
     migration_sql: str
+    cascade_delete: bool = False
     risk: RiskLevel = RiskLevel.MEDIUM
 
 
@@ -360,6 +385,8 @@ class EndpointContract(BaseModel):
     body_keys: list[str] = Field(default_factory=list)
     path_params: list[str] = Field(default_factory=list)
     response_type: str = "object"
+    response_fields: list[str] = Field(default_factory=list)
+    status_codes: list[int] = Field(default_factory=list)
     source_symbol: str
     callers: list[str] = Field(default_factory=list)
 
@@ -517,3 +544,28 @@ class MigrationPassport(BaseModel):
     envelope: DSSEEnvelope
     public_key_pem: str
     signer_did: str
+
+
+# --------------------------------------------------------------------------------------
+# FinOps Cloud Cost & ROI
+# --------------------------------------------------------------------------------------
+
+
+class CostBreakdown(BaseModel):
+    compute_monthly_usd: float
+    database_monthly_usd: float
+    ingress_gateway_monthly_usd: float
+    total_monthly_usd: float
+
+
+class FinOpsReport(BaseModel):
+    currency: str = "USD"
+    monolith_baseline: CostBreakdown
+    modernized_fleet: CostBreakdown
+    monthly_savings_usd: float
+    annual_savings_usd: float
+    savings_percent: float
+    carbon_reduction_kg_yr: float
+    roi_multiple: float
+    assumptions: list[str] = Field(default_factory=list)
+

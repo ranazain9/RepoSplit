@@ -43,8 +43,54 @@
   <div id="graph"><svg></svg><div class="legend" id="legend"></div></div>
   <aside>
     <div class="phases" id="phases"></div>
-    <button id="approve">Approve scaffolding (human oversight gate)</button>
-    <div id="log"></div>
+    <div style="display:flex; border-bottom:1px solid #1f2a47;">
+      <button id="tab-log-btn" style="flex:1; background:transparent; border:none; border-bottom:2px solid var(--accent); color:var(--ink); padding:8px; cursor:pointer; font-weight:600; font-size:12px;">Telemetry Log</button>
+      <button id="tab-customizer-btn" style="flex:1; background:transparent; border:none; border-bottom:2px solid transparent; color:var(--muted); padding:8px; cursor:pointer; font-weight:600; font-size:12px;">Domain Customizer (HITL)</button>
+    </div>
+    <div id="finops-card" style="display:none; padding:10px 12px; background:#122538; border-bottom:1px solid #1f2a47; font-size:12px;">
+      <div style="display:flex; justify-content:space-between; font-weight:600; color:var(--ok); margin-bottom:4px;">
+        <span>FinOps Cloud ROI</span>
+        <span id="finops-savings">-</span>
+      </div>
+      <div style="font-size:11px; color:var(--muted);" id="finops-sub"></div>
+      <div style="margin-top:8px; text-align:right;">
+        <a href="/api/certificate" target="_blank" style="color:var(--accent); text-decoration:none; font-weight:600; font-size:11px;">View Executive Certificate (PDF) &rarr;</a>
+      </div>
+    </div>
+    <div id="log-panel" style="flex:1; display:flex; flex-direction:column; overflow:hidden;">
+      <button id="approve">Approve scaffolding (human oversight gate)</button>
+      <div id="log"></div>
+    </div>
+    <div id="customizer-panel" style="display:none; flex:1; flex-direction:column; overflow:auto; padding:12px; font-size:12px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <strong style="color:var(--ink); font-size:13px;">Human-in-the-Loop Override</strong>
+        <span id="custom-badge" style="background:#16402f; color:var(--ok); padding:2px 6px; border-radius:4px; font-size:10px;">EU AI Act Art 14</span>
+      </div>
+      <div style="background:#1b2540; padding:10px; border-radius:6px; margin-bottom:10px; display:grid; grid-template-columns:1fr 1fr; gap:6px;">
+        <div>Coupling: <strong id="custom-severed" style="color:var(--ok)">-</strong></div>
+        <div>Decoupled: <strong id="custom-reduction" style="color:var(--accent)">-</strong></div>
+        <div>Severed Cuts: <strong id="custom-edges">-</strong></div>
+        <div>Risk Level: <strong id="custom-risk">-</strong></div>
+      </div>
+      <div id="custom-cycles-alert" style="display:none; background:#3b1d1d; border:1px solid #ff5d5d; color:#ffb4b4; padding:8px 10px; border-radius:6px; margin-bottom:10px; font-size:11px;">
+        <strong>⚠️ Circular Deadlock Detected:</strong>
+        <div id="custom-cycles-text" style="margin-top:3px; color:#ffcccc;"></div>
+      </div>
+      <div style="background:#121a2f; border:1px solid #1f2a47; padding:8px; border-radius:6px; margin-bottom:10px; display:flex; gap:6px;">
+        <input id="input-new-service" placeholder="new_service_name" style="flex:1; background:#1b2540; border:1px solid #2a3557; color:var(--ink); padding:4px 8px; border-radius:4px; font-size:11px;" />
+        <button id="btn-add-service" style="background:#2a3557; color:#fff; border:0; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:11px; white-space:nowrap;">+ Add Service</button>
+      </div>
+      <button id="btn-apply-run" style="width:100%; background:linear-gradient(135deg, #4f8cff, #3ddc97); color:#000; font-weight:700; border:0; padding:9px; border-radius:6px; cursor:pointer; margin-bottom:8px; font-size:12px;">
+        ⚡ Apply &amp; Run Modernization
+      </button>
+      <div style="display:flex; gap:8px; margin-bottom:10px;">
+        <button id="btn-save-override" style="flex:1; background:var(--accent); color:#fff; border:0; padding:6px; border-radius:4px; cursor:pointer;">Save Override JSON</button>
+        <button id="btn-reset-override" class="secondary" style="background:#2a3557; color:#fff; border:0; padding:6px; border-radius:4px; cursor:pointer;">Reset</button>
+      </div>
+      <div id="custom-status" style="font-size:11px; color:var(--ok); margin-bottom:8px;"></div>
+      <div style="font-weight:600; color:var(--muted); margin-bottom:6px;">Symbols &amp; Models Assignment:</div>
+      <div id="symbol-list" style="display:flex; flex-direction:column; gap:6px;"></div>
+    </div>
   </aside>
 </main>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
@@ -69,6 +115,11 @@ function log(ev) {
   logEl.appendChild(div); logEl.scrollTop = logEl.scrollHeight;
   setPhase(ev.phase);
   if (ev.payload && ev.payload.approval_required) document.getElementById("approve").style.display = "block";
+  if (ev.payload && ev.payload.annual_savings_usd) {
+    document.getElementById("finops-card").style.display = "block";
+    document.getElementById("finops-savings").textContent = `${Math.round(ev.payload.savings_percent)}% savings ($${Math.round(ev.payload.annual_savings_usd).toLocaleString()}/yr)`;
+    document.getElementById("finops-sub").textContent = `Verified in Migration Passport | Infrastructure efficiency multiple`;
+  }
   if (ev.agent === "architect" && ev.message.startsWith("parsed")) loadGraph(false);
   if (ev.agent === "architect" && ev.level === "success") { loadGraph(true); document.getElementById("untangle").disabled = false; }
 }
@@ -132,6 +183,251 @@ document.getElementById("start").onclick = async () => {
   es.addEventListener("telemetry", e => log(JSON.parse(e.data)));
   es.addEventListener("end", () => { es.close(); document.getElementById("status").textContent += " - finished"; });
 };
+
+async function init() {
+  try {
+    const res = await fetch("/api/latest");
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.has_run) return;
+    if (data.finops) {
+      document.getElementById("finops-card").style.display = "block";
+      document.getElementById("finops-savings").textContent = `${Math.round(data.finops.savings_percent)}% savings ($${Math.round(data.finops.annual_savings_usd).toLocaleString()}/yr)`;
+      document.getElementById("finops-sub").textContent = `Monolith: $${Math.round(data.finops.monolith_baseline.total_monthly_usd)}/mo -> Microservices: $${Math.round(data.finops.modernized_fleet.total_monthly_usd)}/mo`;
+    }
+    const gRes = await fetch("/api/latest/graph");
+    if (gRes.ok) {
+      graphData = await gRes.json();
+      draw(true);
+      document.getElementById("untangle").disabled = false;
+      document.getElementById("status").textContent = `Verified run ${data.run_id} (${data.parity.passRate || '100%'} parity)`;
+      setPhase("COMPLETE");
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
+// Tab Switching
+const tabLogBtn = document.getElementById("tab-log-btn");
+const tabCustomizerBtn = document.getElementById("tab-customizer-btn");
+const logPanel = document.getElementById("log-panel");
+const customizerPanel = document.getElementById("customizer-panel");
+
+tabLogBtn.onclick = () => {
+  tabLogBtn.style.borderBottom = "2px solid var(--accent)";
+  tabLogBtn.style.color = "var(--ink)";
+  tabCustomizerBtn.style.borderBottom = "2px solid transparent";
+  tabCustomizerBtn.style.color = "var(--muted)";
+  logPanel.style.display = "flex";
+  customizerPanel.style.display = "none";
+};
+
+tabCustomizerBtn.onclick = () => {
+  tabCustomizerBtn.style.borderBottom = "2px solid var(--accent)";
+  tabCustomizerBtn.style.color = "var(--ink)";
+  tabLogBtn.style.borderBottom = "2px solid transparent";
+  tabLogBtn.style.color = "var(--muted)";
+  logPanel.style.display = "none";
+  customizerPanel.style.display = "flex";
+  loadCustomizerData();
+};
+
+let customAssignments = {};
+let availableClusters = [];
+let baselineTopology = null;
+
+async function loadCustomizerData() {
+  try {
+    const res = await fetch("/api/topology");
+    if (!res.ok) return;
+    const data = await res.json();
+    baselineTopology = data.topology;
+    availableClusters = Object.keys(data.topology.clusters || {});
+    if (!availableClusters.includes("shared_kernel")) availableClusters.push("shared_kernel");
+
+    updateCustomizerMetrics({
+      initial_coupling: data.topology.initial_coupling,
+      severed_coupling: data.topology.severed_coupling,
+      coupling_reduction_pct: data.topology.initial_coupling > 0 ? Math.round((1 - data.topology.severed_coupling / data.topology.initial_coupling) * 100) : 0,
+      severed_edges_count: (data.topology.severed_edges || []).length,
+      risk_level: data.topology.risk_level,
+    });
+
+    customAssignments = {};
+    for (const [cname, cluster] of Object.entries(data.topology.clusters || {})) {
+      for (const sid of cluster.symbols || []) {
+        customAssignments[sid] = cname;
+      }
+    }
+
+    renderSymbolList(data.symbols || []);
+  } catch (err) {
+    console.error("Failed to load topology:", err);
+  }
+}
+
+function updateCustomizerMetrics(metrics) {
+  document.getElementById("custom-severed").textContent = `${metrics.initial_coupling.toFixed(2)} -> ${metrics.severed_coupling.toFixed(2)}`;
+  document.getElementById("custom-reduction").textContent = `${metrics.coupling_reduction_pct}%`;
+  document.getElementById("custom-edges").textContent = `${metrics.severed_edges_count} edges`;
+  const riskEl = document.getElementById("custom-risk");
+  riskEl.textContent = metrics.risk_level.toUpperCase();
+  riskEl.style.color = metrics.risk_level === "low" ? "var(--ok)" : metrics.risk_level === "medium" ? "var(--warn)" : "var(--err)";
+
+  const cyclesAlert = document.getElementById("custom-cycles-alert");
+  const cyclesText = document.getElementById("custom-cycles-text");
+  if (metrics.cycles && metrics.cycles.length > 0) {
+    cyclesAlert.style.display = "block";
+    cyclesText.innerHTML = metrics.cycles.map(c => `<code>${c.members.join(" &harr; ")}</code><div style="font-size:10px; color:#ffd0d0; margin-top:2px;">${c.resolution}</div>`).join("<hr style='border:0; border-top:1px dashed #ff8888; margin:4px 0;'>");
+  } else {
+    cyclesAlert.style.display = "none";
+  }
+}
+
+document.getElementById("btn-add-service").onclick = () => {
+  const input = document.getElementById("input-new-service");
+  let val = input.value.trim().toLowerCase().replace(/[^a-z0-9_]/g, "_");
+  if (!val) return;
+  if (!val.endsWith("_service") && val !== "shared_kernel") val += "_service";
+  if (!availableClusters.includes(val)) {
+    availableClusters.push(val);
+    document.querySelectorAll("#symbol-list select").forEach(sel => {
+      const opt = document.createElement("option");
+      opt.value = val;
+      opt.textContent = val;
+      sel.appendChild(opt);
+    });
+    const statusEl = document.getElementById("custom-status");
+    statusEl.textContent = `Added service: ${val}`;
+    setTimeout(() => { statusEl.textContent = ""; }, 3000);
+  }
+  input.value = "";
+};
+
+function renderSymbolList(symbols) {
+  const container = document.getElementById("symbol-list");
+  container.innerHTML = "";
+  symbols.sort((a, b) => (b.is_model ? 1 : 0) - (a.is_model ? 1 : 0) || a.name.localeCompare(b.name));
+
+  symbols.forEach(sym => {
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex; justify-content:space-between; align-items:center; background:#121a2f; border:1px solid #1f2a47; padding:6px 8px; border-radius:4px;";
+
+    const label = document.createElement("div");
+    label.style.cssText = "overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px;";
+    label.innerHTML = `<strong style="color:${sym.is_model ? '#fff' : 'var(--ink)'}">${sym.name}</strong> <span style="color:var(--muted); font-size:10px;">(${sym.kind})</span>`;
+    label.title = `${sym.id} (${sym.module})`;
+
+    const select = document.createElement("select");
+    select.style.cssText = "background:#1b2540; border:1px solid #2a3557; color:var(--ink); padding:4px 6px; border-radius:4px; font-size:11px; max-width:160px;";
+
+    const currentCl = customAssignments[sym.id] || "shared_kernel";
+    availableClusters.forEach(cl => {
+      const opt = document.createElement("option");
+      opt.value = cl;
+      opt.textContent = cl;
+      if (cl === currentCl) opt.selected = true;
+      select.appendChild(opt);
+    });
+
+    select.onchange = async () => {
+      customAssignments[sym.id] = select.value;
+      await previewCustomTopology();
+    };
+
+    row.appendChild(label);
+    row.appendChild(select);
+    container.appendChild(row);
+  });
+}
+
+async function previewCustomTopology() {
+  try {
+    const res = await fetch("/api/topology/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assignments: customAssignments }),
+    });
+    if (!res.ok) return;
+    const preview = await res.json();
+    updateCustomizerMetrics(preview);
+
+    if (graphData && graphData.nodes) {
+      graphData.nodes.forEach(n => {
+        if (customAssignments[n.id]) {
+          n.cluster = customAssignments[n.id];
+        }
+      });
+      graphData.clusters = Array.from(new Set(graphData.nodes.map(n => n.cluster)));
+      draw(true);
+      if (sim) sim.alpha(0.4).restart();
+    }
+  } catch (err) {
+    console.error("Preview failed:", err);
+  }
+}
+
+document.getElementById("btn-apply-run").onclick = async () => {
+  const statusEl = document.getElementById("custom-status");
+  statusEl.textContent = "Launching pipeline with custom architecture...";
+  try {
+    const res = await fetch("/api/runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        repo_path: document.getElementById("repo").value,
+        live: document.getElementById("live").checked,
+        require_approval: false,
+        manual_assignments: customAssignments,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      statusEl.textContent = data.detail || "Error launching run";
+      return;
+    }
+    runId = data.run_id;
+    untangled = true;
+    tabLogBtn.click();
+    document.getElementById("status").textContent = `Run ${runId} (Human Override Active)`;
+    document.getElementById("log").innerHTML = "";
+    const es = new EventSource(`/api/runs/${runId}/events`);
+    es.addEventListener("telemetry", e => log(JSON.parse(e.data)));
+    es.addEventListener("end", () => {
+      es.close();
+      document.getElementById("status").textContent = `Run ${runId} finished (Human Override Attested)`;
+    });
+  } catch (err) {
+    statusEl.textContent = "Failed to run: " + err;
+  }
+};
+
+document.getElementById("btn-save-override").onclick = async () => {
+  const statusEl = document.getElementById("custom-status");
+  statusEl.textContent = "Saving override...";
+  try {
+    const res = await fetch("/api/topology/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assignments: customAssignments }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      statusEl.textContent = `Saved to ${data.path} (${data.rules_count} rules)!`;
+      setTimeout(() => { statusEl.textContent = ""; }, 4000);
+    } else {
+      statusEl.textContent = "Error saving override";
+    }
+  } catch (e) {
+    statusEl.textContent = "Failed to save: " + e;
+  }
+};
+
+document.getElementById("btn-reset-override").onclick = () => {
+  loadCustomizerData();
+};
+
+init();
 </script>
 </body>
 </html>

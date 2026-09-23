@@ -18,9 +18,33 @@ from typing import Protocol
 from reposplit.core.schemas import DependencyGraph, GraphEdge, GraphNode, ParamSpec, RouteInfo
 from reposplit.utils.hashing import iter_repo_files
 
-MODEL_BASES = {"Model", "db.Model", "Base", "DeclarativeBase", "SQLModel", "Document"}
-ROUTE_DECORATOR_ATTRS = {"route", "get", "post", "put", "patch", "delete"}
+MODEL_BASES = {
+    # SQLAlchemy / Flask-SQLAlchemy
+    "Model", "db.Model", "Base", "DeclarativeBase", "SQLModel", "Document",
+    # Django ORM
+    "models.Model", "django.db.models.Model",
+    # DRF
+    "ModelSerializer", "Serializer",
+}
+ROUTE_DECORATOR_ATTRS = {
+    # Flask / FastAPI
+    "route", "get", "post", "put", "patch", "delete",
+    # DRF
+    "api_view",
+}
 SKIP_DIRS = {"tests", "test", "migrations", "alembic", "scripts"}
+
+# Django field constructors that map to columns
+DJANGO_FIELD_TYPES = {
+    "AutoField", "BigAutoField", "SmallAutoField",
+    "CharField", "TextField", "EmailField", "URLField", "SlugField",
+    "IntegerField", "BigIntegerField", "SmallIntegerField", "PositiveIntegerField",
+    "FloatField", "DecimalField",
+    "BooleanField", "NullBooleanField",
+    "DateField", "DateTimeField", "TimeField", "DurationField",
+    "UUIDField", "JSONField", "BinaryField",
+    "ForeignKey", "OneToOneField", "ManyToManyField",
+}
 
 
 class LanguageParser(Protocol):
@@ -42,23 +66,98 @@ def _decorator_name(dec: ast.expr) -> str:
     return ast.unparse(target)
 
 
-def _route_from_decorators(decorators: list[ast.expr]) -> RouteInfo | None:
+def _extract_returns(fn: ast.AST) -> tuple[list[str], list[int]]:
+    fields: list[str] = []
+    status_codes: list[int] = []
+
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Return) or node.value is None:
+            continue
+        val = node.value
+
+        # Check for tuple return: (body, status_code)
+        if isinstance(val, ast.Tuple):
+            elts = val.elts
+            if len(elts) >= 2 and isinstance(elts[1], ast.Constant) and isinstance(elts[1].value, int):
+                status_codes.append(elts[1].value)
+            val = elts[0] if elts else None
+
+        if val is None:
+            continue
+
+        # Direct dictionary return: {"id": ..., "name": ...}
+        if isinstance(val, ast.Dict):
+            for k in val.keys:
+                if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                    fields.append(k.value)
+
+        # Call return: jsonify(...), dict(...)
+        elif isinstance(val, ast.Call):
+            fname = ast.unparse(val.func).split(".")[-1]
+            if fname in ("jsonify", "json", "dict"):
+                for kw in val.keywords:
+                    if kw.arg:
+                        fields.append(kw.arg)
+                if val.args and isinstance(val.args[0], ast.Dict):
+                    for k in val.args[0].keys:
+                        if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                            fields.append(k.value)
+
+    if not status_codes:
+        status_codes = [200]
+
+    return list(dict.fromkeys(fields)), sorted(set(status_codes))
+
+
+def _classify_operation(fn: ast.AST, methods: list[str]) -> str:
+    m_upper = [m.upper() for m in methods]
+    if all(m in ("GET", "HEAD", "OPTIONS") for m in m_upper):
+        return "READ"
+    if any(m in ("PUT", "PATCH", "DELETE") for m in m_upper):
+        return "IDEMPOTENT"
+    return "MUTATING"
+
+
+def _route_from_decorators(decorators: list[ast.expr], fn: ast.AST | None = None) -> RouteInfo | None:
     for dec in decorators:
-        if not isinstance(dec, ast.Call) or not isinstance(dec.func, ast.Attribute):
-            continue
-        attr = dec.func.attr
-        if attr not in ROUTE_DECORATOR_ATTRS:
-            continue
-        if not dec.args or not isinstance(dec.args[0], ast.Constant) or not isinstance(dec.args[0].value, str):
-            continue
-        path = dec.args[0].value
-        methods = ["GET"] if attr in ("route", "get") else [attr.upper()]
-        for kw in dec.keywords:
-            if kw.arg == "methods" and isinstance(kw.value, ast.List | ast.Tuple):
+        # ---- Flask / FastAPI style: @app.get("/path") or @bp.route("/path", methods=[...])
+        if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute):
+            attr = dec.func.attr
+            if attr in ROUTE_DECORATOR_ATTRS and dec.args and isinstance(dec.args[0], ast.Constant) and isinstance(dec.args[0].value, str):
+                path = dec.args[0].value
+                methods = ["GET"] if attr in ("route", "get") else [attr.upper()]
+                for kw in dec.keywords:
+                    if kw.arg == "methods" and isinstance(kw.value, ast.List | ast.Tuple):
+                        methods = [
+                            elt.value.upper() for elt in kw.value.elts if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+                        ]
+                resp_fields, status_codes = _extract_returns(fn) if fn else ([], [200])
+                op_kind = _classify_operation(fn, methods) if fn else "READ"
+                return RouteInfo(
+                    path=path,
+                    methods=methods,
+                    blueprint=ast.unparse(dec.func.value),
+                    response_fields=resp_fields,
+                    status_codes=status_codes,
+                    operation_kind=op_kind,
+                )
+        # ---- Django @api_view(["GET", "POST"])
+        if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Name) and dec.func.id == "api_view":
+            methods = ["GET"]
+            if dec.args and isinstance(dec.args[0], ast.List | ast.Tuple):
                 methods = [
-                    elt.value.upper() for elt in kw.value.elts if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+                    elt.value.upper() for elt in dec.args[0].elts
+                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
                 ]
-        return RouteInfo(path=path, methods=methods, blueprint=ast.unparse(dec.func.value))
+            resp_fields, status_codes = _extract_returns(fn) if fn else ([], [200])
+            return RouteInfo(
+                path=f"/{fn.name.replace('_', '-')}" if hasattr(fn, "name") else "/",  # type: ignore[union-attr]
+                methods=methods,
+                blueprint="django",
+                response_fields=resp_fields,
+                status_codes=status_codes,
+                operation_kind=_classify_operation(fn, methods) if fn else "READ",
+            )
     return None
 
 
@@ -188,7 +287,7 @@ class PythonRepoParser:
                     loc=(node.end_lineno or node.lineno) - node.lineno + 1,
                     params=_params(node),
                     returns=ast.unparse(node.returns) if node.returns else None,
-                    route=_route_from_decorators(node.decorator_list),
+                    route=_route_from_decorators(node.decorator_list, node),
                     decorators=[_decorator_name(d) for d in node.decorator_list],
                     body_keys=_body_keys(node),
                 )
@@ -327,8 +426,33 @@ class PythonRepoParser:
                     self.edges[(owner, target, "fk")] += 1
 
     def _scan_body(self, owner: str, node: ast.AST, info: _ModuleInfo) -> None:
+        is_fn_tx = False
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            is_fn_tx = any(
+                "transaction" in ast.unparse(d).lower() or "atomic" in ast.unparse(d).lower()
+                for d in node.decorator_list
+            )
+
         for sub in ast.walk(node):
-            if isinstance(sub, ast.Call):
+            if isinstance(sub, ast.With):
+                is_tx = any(
+                    any(
+                        t in ast.unparse(item.context_expr).lower()
+                        for t in ("session.begin", "transaction.atomic", "db.session.begin", "begin_nested")
+                    )
+                    for item in sub.items
+                )
+                if is_tx:
+                    for inner in ast.walk(sub):
+                        if isinstance(inner, ast.Call):
+                            target = None
+                            if isinstance(inner.func, ast.Name):
+                                target = self._resolve_name(inner.func.id, info)
+                            elif isinstance(inner.func, ast.Attribute):
+                                target = self._resolve_attr_call(inner.func, info)
+                            if target and target != owner:
+                                self.edges[(owner, target, "transaction")] += 5
+            elif isinstance(sub, ast.Call):
                 target = None
                 if isinstance(sub.func, ast.Name):
                     target = self._resolve_name(sub.func.id, info)
@@ -337,6 +461,8 @@ class PythonRepoParser:
                 # Model constructors (User(...)) are counted by the Name branch below.
                 if target and target != owner and not self.nodes[target].is_model:
                     self.edges[(owner, target, "call")] += 1
+                    if is_fn_tx:
+                        self.edges[(owner, target, "transaction")] += 5
             elif isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
                 target = self._resolve_name(sub.id, info)
                 if target and target != owner and self.nodes[target].is_model:

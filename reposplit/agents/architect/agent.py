@@ -3,25 +3,22 @@
 from __future__ import annotations
 
 import re
-from collections import defaultdict
+from pathlib import Path
 
 from reposplit.agents.architect.ast_parser import PythonRepoParser
 from reposplit.agents.architect.graph_metrics import (
     SHARED_KERNEL,
-    coupling,
-    cross_cluster_fraction,
-    cross_module_fraction,
-    find_cycles,
-    module_graph,
+    build_domain_topology,
+    cluster_graph,
+    edge_risk,
+    overall_risk,
     partition_symbols,
-    symbol_graph,
 )
 from reposplit.agents.architect.prompts import ARCHITECT_SYSTEM, architect_user_prompt
 from reposplit.core.base_agent import AgentError, BaseAgent
 from reposplit.core.schemas import (
     AgentResult,
     ArchitectDecision,
-    Cluster,
     ClusterAssignment,
     DependencyCycle,
     DependencyGraph,
@@ -56,7 +53,9 @@ class ArchitectAgent(BaseAgent):
             raise AgentError("no classes or functions found to partition")
 
         topology = self._partition(graph)
+        topology = self._resolve_helper_closures(topology, graph)
         topology = await self._refine_with_llm(topology, graph)
+        topology = self._apply_topology_override(topology, graph)
         self._apply_mode(topology)
         self.bb.put(Keys.TOPOLOGY, topology)
 
@@ -73,126 +72,100 @@ class ArchitectAgent(BaseAgent):
             initial_coupling=topology.initial_coupling,
             severed_coupling=topology.severed_coupling,
             cycles=len(topology.cycles),
+            human_override=topology.human_override,
         )
 
-    # ---- deterministic partition ---------------------------------------------------
+    # ---- deterministic partition & human overrides ---------------------------------
 
     def _partition(self, graph: DependencyGraph) -> DomainTopology:
-        nodes = graph.node_map()
-        g = symbol_graph(graph)
         part = partition_symbols(graph, seed=self.config.seed)
+        return build_domain_topology(graph, part.assignment, modularity_val=part.modularity)
 
-        clusters: dict[str, Cluster] = {}
-        files_by_cluster: dict[str, set[str]] = defaultdict(set)
-        for cname, symbols in part.members.items():
-            files = sorted({nodes[s].module for s in symbols})
-            files_by_cluster[cname] = set(files)
-            clusters[cname] = Cluster(
-                name=cname,
-                kind="shared_kernel" if cname == SHARED_KERNEL else "service",
-                files=files,
-                symbols=symbols,
-                metrics=coupling(g, set(symbols)),
-                loc=sum(nodes[s].loc for s in symbols),
-                extract=cname != SHARED_KERNEL,
-            )
-        # Files with no partitionable symbols (db.py, config.py, ...) belong to the shared kernel.
-        assigned_files = {f for fs in files_by_cluster.values() for f in fs}
-        orphan_files = sorted(n.module for n in graph.nodes if n.kind == "module" and n.module not in assigned_files)
-        if orphan_files:
-            kernel = clusters.get(SHARED_KERNEL) or Cluster(
-                name=SHARED_KERNEL, kind="shared_kernel", files=[], symbols=[], metrics=coupling(g, set()), extract=False
-            )
-            kernel.files = sorted(set(kernel.files) | set(orphan_files))
-            clusters[SHARED_KERNEL] = kernel
+    def _resolve_helper_closures(self, topology: DomainTopology, graph: DependencyGraph) -> DomainTopology:
+        nodes = graph.node_map()
+        assignment = {sid: topology.cluster_of(sid) or SHARED_KERNEL for sid in nodes}
+        changed = False
 
-        service_names = {c for c, cl in clusters.items() if cl.kind == "service"}
-        severed: list[SeveredEdge] = []
-        for e in graph.edges:
-            cu, cv = part.assignment.get(e.source), part.assignment.get(e.target)
-            if not cu or not cv or cu == cv or cu not in service_names or cv not in service_names:
+        for sid, n in nodes.items():
+            if n.kind != "function" or n.route or n.is_model or not n.name.startswith("_"):
                 continue
-            severed.append(
-                SeveredEdge(
-                    source=e.source,
-                    target=e.target,
-                    source_cluster=cu,
-                    target_cluster=cv,
-                    kind=e.kind,
-                    weight=e.weight,
-                    risk=self._edge_risk(e.kind, e.weight),
-                )
-            )
-        severed.sort(key=lambda s: (-s.weight, s.source))
+            callers = [e.source for e in graph.edges if e.target == sid and e.kind == "call" and e.source in nodes]
+            if not callers:
+                continue
+            caller_clusters = {assignment.get(c) for c in callers} - {SHARED_KERNEL, None}
+            if len(caller_clusters) == 1:
+                sole_cluster = next(iter(caller_clusters))
+                if assignment.get(sid) != sole_cluster and sole_cluster in topology.clusters:
+                    assignment[sid] = sole_cluster
+                    changed = True
+            elif len(caller_clusters) > 1:
+                if assignment.get(sid) != SHARED_KERNEL:
+                    assignment[sid] = SHARED_KERNEL
+                    changed = True
 
-        split_files = sorted(
-            f for f in assigned_files if sum(1 for fs in files_by_cluster.values() if f in fs) > 1
-        )
+        if changed:
+            self.log("resolved helper closures into caller cluster(s)")
+            return build_domain_topology(graph, assignment, modularity_val=topology.modularity)
+        return topology
 
-        cycles: list[DependencyCycle] = []
-        cluster_g = self._cluster_graph(severed)
-        for scc in find_cycles(cluster_g):
-            cycles.append(
-                DependencyCycle(
-                    members=scc,
-                    resolution="Cyclic service dependency: introduce an event-driven intermediary (outbox event) "
-                    "or a shared DTO contract so one direction becomes asynchronous.",
-                )
-            )
-        for scc in find_cycles(module_graph(graph)):
-            cycles.append(
-                DependencyCycle(
-                    members=scc,
-                    resolution="Circular module import: hoist shared symbols into the shared kernel or use late imports.",
-                )
-            )
+    def _apply_topology_override(self, topology: DomainTopology, graph: DependencyGraph) -> DomainTopology:
+        overrides: dict[str, str] = dict(self.config.manual_assignments)
+        if self.config.topology_override:
+            p = Path(self.config.topology_override)
+            if not p.exists():
+                p = Path(self.ctx.repo_root) / self.config.topology_override
+            if not p.exists():
+                p = Path.cwd() / self.config.topology_override
+            if p.exists():
+                import json
 
-        risk = self._overall_risk(severed, cycles)
-        return DomainTopology(
-            clusters=dict(sorted(clusters.items())),
-            severed_edges=severed,
-            cycles=cycles,
-            split_files=split_files,
-            modularity=part.modularity,
-            initial_coupling=cross_module_fraction(g),
-            severed_coupling=cross_cluster_fraction(g, part.assignment, service_names),
-            risk_level=risk,
-            rationale="Louvain community detection over the symbol-level call/data graph; "
-            "infrastructure symbols routed to the shared kernel; tiny communities absorbed by strongest neighbour.",
+                try:
+                    with open(p, encoding="utf-8") as f:
+                        data = json.load(f)
+                        if isinstance(data, dict):
+                            overrides.update(data)
+                except Exception as ex:
+                    self.log(f"failed to load topology override from {p}: {ex}", level="warning")
+
+        if not overrides:
+            return topology
+
+        current_assignment: dict[str, str] = {}
+        for sid in graph.node_map():
+            current_assignment[sid] = topology.cluster_of(sid) or SHARED_KERNEL
+
+        applied_count = 0
+        for sid, node in graph.node_map().items():
+            if sid in overrides:
+                current_assignment[sid] = overrides[sid]
+                applied_count += 1
+            elif node.name in overrides:
+                current_assignment[sid] = overrides[node.name]
+                applied_count += 1
+            elif node.module in overrides:
+                current_assignment[sid] = overrides[node.module]
+                applied_count += 1
+
+        self.log(f"applied {applied_count} human topology override(s) across {len(overrides)} rule(s)")
+        return build_domain_topology(
+            graph,
+            current_assignment,
+            modularity_val=topology.modularity,
+            human_override=True,
+            rationale=f"Human-in-the-loop override applied ({len(overrides)} rule(s)).",
         )
 
     @staticmethod
     def _cluster_graph(severed: list[SeveredEdge]):
-        import networkx as nx
-
-        g = nx.DiGraph()
-        for s in severed:
-            g.add_edge(s.source_cluster, s.target_cluster)
-        return g
+        return cluster_graph(severed)
 
     @staticmethod
     def _edge_risk(kind: str, weight: int) -> RiskLevel:
-        if kind in ("fk", "inherits"):
-            return RiskLevel.HIGH
-        if kind == "data_access":
-            return RiskLevel.HIGH
-        if weight > HIGH_RISK_CALL_WEIGHT:
-            return RiskLevel.HIGH
-        if weight > 1:
-            return RiskLevel.MEDIUM
-        return RiskLevel.LOW
+        return edge_risk(kind, weight)
 
     @staticmethod
     def _overall_risk(severed: list[SeveredEdge], cycles: list[DependencyCycle]) -> RiskLevel:
-        highs = sum(1 for s in severed if s.risk == RiskLevel.HIGH)
-        service_cycle = any(all(not m.endswith(".py") for m in c.members) for c in cycles)
-        if highs > 10:
-            return RiskLevel.CRITICAL
-        if service_cycle or highs > 5:
-            return RiskLevel.HIGH
-        if highs > 0 or len(severed) > 5:
-            return RiskLevel.MEDIUM
-        return RiskLevel.LOW
+        return overall_risk(severed, cycles)
 
     # ---- LLM refinement ------------------------------------------------------------
 

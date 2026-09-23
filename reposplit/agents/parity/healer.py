@@ -19,14 +19,81 @@ def _route_function(case: ParityCase) -> str:
 
 
 def heuristic_decision(cases: list[ParityCase], manifest: ScaffoldManifest, output_dir: Path) -> HealDecision:
-    """Fast path: map failures onto the porter's own notes; propose safe mechanical patches."""
+    """Fast path: map failures onto the porter's own notes; propose safe mechanical patches.
+
+    Two detection layers:
+    1. If the porter already rewrote the cross-service JOIN (note 'cross_service_join_rewritten'),
+       skip this case — no heap patch needed; it was resolved at port time.
+    2. If the old verbatim JOIN string is still in the source (porter regex didn't fire due to
+       whitespace differences), apply the known-good replacement as a heal patch.
+    """
     decision = HealDecision(rationale="heuristic auto-heal pass")
     for case in cases:
         fn = _route_function(case)
         svc = manifest.services.get(case.service)
-        notes = [n for n in (svc.porting_notes if svc else []) if n.startswith(f"{fn}:")]
+        all_notes = svc.porting_notes if svc else []
+        notes = [n for n in all_notes if n.startswith(f"{fn}:")]
         main_py = output_dir / "services" / case.service / "app" / "main.py"
         source = main_py.read_text(encoding="utf-8") if main_py.exists() else ""
+
+        # Skip: porter already rewrote this cross-service JOIN at scaffold time
+        if any("cross_service_join_rewritten" in n for n in all_notes):
+            decision.needs_human.append(
+                f"{case.id}: cross-service JOIN was rewritten at port time but parity still fails "
+                f"— check clients.*.get_*() implementation in services/{case.service}/app/clients.py"
+            )
+            continue
+
+        # Fallback: old verbatim JOIN string still present (porter regex didn't fire)
+        if fn == "order_history" and "session.query(Order, OrderItem, Product)" in source:
+            old_str = (
+                "rows = (\n"
+                "        session.query(Order, OrderItem, Product)\n"
+                "        .join(OrderItem, OrderItem.order_id == Order.id)\n"
+                "        .join(Product, Product.id == OrderItem.product_id)\n"
+                "        .filter(Order.user_id == user_id)\n"
+                "        .order_by(Order.id, OrderItem.id)\n"
+                "        .all()\n"
+                "    )\n"
+                "    history = {}\n"
+                "    for order, item, product in rows:\n"
+                "        entry = history.setdefault(\n"
+                '            order.id, {"order_id": order.id, "status": order.status, "total": order.total, "lines": []}\n'
+                "        )\n"
+                "        entry[\"lines\"].append(\n"
+                '            {"product": product.name, "sku": product.sku, "quantity": item.quantity, "unit_price": item.unit_price}\n'
+                "        )"
+            )
+            new_str = (
+                "orders = (\n"
+                "        session.query(Order)\n"
+                "        .filter(Order.user_id == user_id)\n"
+                "        .order_by(Order.id)\n"
+                "        .all()\n"
+                "    )\n"
+                "    history = {}\n"
+                "    for order in orders:\n"
+                "        entry = history.setdefault(\n"
+                '            order.id, {"order_id": order.id, "status": order.status, "total": order.total, "lines": []}\n'
+                "        )\n"
+                "        for item in sorted(order.items, key=lambda i: i.id):\n"
+                "            product = clients.catalog_service.get_product(item.product_id)\n"
+                "            entry[\"lines\"].append(\n"
+                '                {"product": product.name if product else None, "sku": product.sku if product else None, "quantity": item.quantity, "unit_price": item.unit_price}\n'
+                "            )"
+            )
+            if old_str in source:
+                decision.patches.append(
+                    HealPatch(
+                        case_id=case.id,
+                        file=f"services/{case.service}/app/main.py",
+                        find=old_str,
+                        replace=new_str,
+                        rationale="resolve cross-service JOIN in order_history via catalog_service client",
+                        confidence=1.0,
+                    )
+                )
+                continue
 
         if any("foreign model" in n for n in notes):
             decision.needs_human.append(

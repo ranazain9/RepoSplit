@@ -79,12 +79,33 @@ def sign_statement(statement: InTotoStatement, key: Ed25519PrivateKey) -> Migrat
     return MigrationPassport(statement=statement, envelope=envelope, public_key_pem=pem, signer_did=did_key(public))
 
 
-def verify_passport(passport: MigrationPassport) -> tuple[bool, list[str]]:
-    """Verify the DSSE signature and that the envelope payload matches the embedded statement."""
+def verify_passport(
+    passport: MigrationPassport,
+    trusted_key: Ed25519PublicKey | str | Path | None = None,
+    trusted_did: str | None = None,
+) -> tuple[bool, list[str]]:
+    """Verify the DSSE signature, statement consistency, and optional trusted root key / DID."""
     problems: list[str] = []
     public = serialization.load_pem_public_key(passport.public_key_pem.encode())
     if not isinstance(public, Ed25519PublicKey):
         return False, ["public key is not Ed25519"]
+
+    if trusted_key is not None:
+        if isinstance(trusted_key, (str, Path)):
+            key_bytes = Path(trusted_key).read_bytes() if Path(str(trusted_key)).exists() else str(trusted_key).encode()
+            trusted_pub = serialization.load_pem_public_key(key_bytes)
+        else:
+            trusted_pub = trusted_key
+        if not isinstance(trusted_pub, Ed25519PublicKey):
+            return False, ["trusted key must be Ed25519"]
+        if public.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw) != trusted_pub.public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        ):
+            problems.append("signer public key does not match trusted root key")
+
+    if trusted_did and passport.signer_did != trusted_did:
+        problems.append(f"signer DID {passport.signer_did} does not match trusted DID {trusted_did}")
+
     payload = base64.b64decode(passport.envelope.payload)
     expected = canonical_json(passport.statement.model_dump(mode="json", by_alias=True))
     if payload != expected:

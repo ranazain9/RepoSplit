@@ -10,6 +10,7 @@ Usage:  python canary_controller.py --admin http://localhost:9901 --envoy-config
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import time
 import urllib.request
@@ -17,21 +18,27 @@ import urllib.request
 import yaml
 
 ROLLBACK_THRESHOLD = {{ plan.rollback_error_rate_threshold }}
+MAX_LATENCY_MS = 2000.0  # 2-second P99 SLA threshold
 STAGES = [{% for s in plan.stages %}{{ s.canary_weight }}{{ ", " if not loop.last }}{% endfor %}]
 SERVICES = [{% for svc in plan.routes | map(attribute="service") | unique | sort %}"{{ svc }}"{{ ", " if not loop.last }}{% endfor %}]
 
 _STAT = re.compile(r"^cluster\.(?P<cluster>[\w-]+)\.upstream_rq_(?P<code>2xx|5xx|total): (?P<value>\d+)$")
+_LATENCY_STAT = re.compile(r"^cluster\.(?P<cluster>[\w-]+)\.upstream_rq_time:.*P99\((?P<p99>[\d.]+)\)")
 
 
-def read_stats(admin_url: str) -> dict[str, dict[str, int]]:
+def read_stats(admin_url: str) -> tuple[dict[str, dict[str, int]], dict[str, float]]:
     with urllib.request.urlopen(f"{admin_url}/stats") as resp:  # noqa: S310 - local admin endpoint
         text = resp.read().decode()
     stats: dict[str, dict[str, int]] = {}
+    latencies: dict[str, float] = {}
     for line in text.splitlines():
         m = _STAT.match(line.strip())
         if m:
             stats.setdefault(m["cluster"], {})[m["code"]] = int(m["value"])
-    return stats
+        ml = _LATENCY_STAT.match(line.strip())
+        if ml:
+            latencies[ml["cluster"]] = float(ml["p99"])
+    return stats, latencies
 
 
 def error_rate(stats: dict[str, dict[str, int]], cluster: str) -> float:
@@ -40,7 +47,38 @@ def error_rate(stats: dict[str, dict[str, int]], cluster: str) -> float:
     return (s.get("5xx", 0) / total) if total else 0.0
 
 
-def set_weight(config_path: str, service: str, canary_weight: int) -> None:
+def set_weight_xds(admin_url: str, service: str, canary_weight: int) -> None:
+    """Update canary weight via Envoy's admin /runtime_modify API (no reload needed)."""
+    import json as _json
+    import urllib.parse
+
+    data = urllib.parse.urlencode({
+        f"upstream.healthy_panic_threshold": "0",
+        f"upstream.{service}_canary.weight": str(canary_weight),
+        f"upstream.{service}_monolith.weight": str(100 - canary_weight),
+    }).encode()
+    req = urllib.request.Request(  # noqa: S310
+        f"{admin_url}/runtime_modify",
+        data=data,
+        method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    with urllib.request.urlopen(req) as resp:  # noqa: S310
+        if resp.status != 200:
+            raise RuntimeError(f"xDS runtime_modify failed: {resp.status}")
+    print(f"[canary-xDS] {service}: canary weight -> {canary_weight}% (applied via runtime_modify, no reload)")
+
+
+def set_weight(config_path: str, service: str, canary_weight: int, admin_url: str | None = None) -> None:
+    # Prefer xDS runtime_modify when admin URL is available (zero-downtime, no reload)
+    _admin = admin_url or os.environ.get("ENVOY_ADMIN_URL", "")
+    if _admin:
+        try:
+            set_weight_xds(_admin, service, canary_weight)
+            return
+        except Exception as exc:  # noqa: BLE001
+            print(f"[canary] xDS failed ({exc}), falling back to YAML edit")
+    # Fallback: edit envoy.yaml on disk
     with open(config_path, encoding="utf-8") as fh:
         cfg = yaml.safe_load(fh)
     vhosts = cfg["static_resources"]["listeners"][0]["filter_chains"][0]["filters"][0]["typed_config"]["route_config"]["virtual_hosts"]
@@ -52,7 +90,7 @@ def set_weight(config_path: str, service: str, canary_weight: int) -> None:
         clusters[1]["weight"] = canary_weight
     with open(config_path, "w", encoding="utf-8") as fh:
         yaml.safe_dump(cfg, fh, sort_keys=False)
-    print(f"[canary] {service}: canary weight -> {canary_weight}% (reload Envoy or use xDS to apply)")
+    print(f"[canary] {service}: canary weight -> {canary_weight}% (YAML edited; send SIGHUP or restart Envoy)")
 
 
 def promote(config_path: str, service: str, current: int) -> int:
@@ -63,22 +101,31 @@ def promote(config_path: str, service: str, current: int) -> int:
 
 def watch(admin_url: str, config_path: str, interval: float = 10.0) -> None:
     while True:
-        stats = read_stats(admin_url)
+        stats, latencies = read_stats(admin_url)
         for svc in SERVICES:
             rate = error_rate(stats, svc)
-            print(f"[canary] {svc}: 5xx rate {rate:.4%}")
+            p99 = latencies.get(svc, 0.0)
+            latency_str = f", P99={p99:.1f}ms" if p99 else ""
+            print(f"[canary] {svc}: 5xx rate {rate:.4%}{latency_str}")
             if rate > ROLLBACK_THRESHOLD:
                 print(f"[canary] ROLLBACK {svc}: {rate:.4%} > {ROLLBACK_THRESHOLD:.4%}")
+                set_weight(config_path, svc, 0)
+            elif p99 > MAX_LATENCY_MS:
+                print(f"[canary] ROLLBACK {svc}: latency P99 {p99:.1f}ms > {MAX_LATENCY_MS:.1f}ms")
                 set_weight(config_path, svc, 0)
         time.sleep(interval)
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--admin", default="http://localhost:9901")
-    ap.add_argument("--envoy-config", default="envoy.yaml")
+    ap.add_argument("--admin", default=os.environ.get("ENVOY_ADMIN_URL", "http://localhost:9901"),
+                    help="Envoy admin API URL (for stats polling and xDS runtime_modify)")
+    ap.add_argument("--envoy-config", default="envoy.yaml",
+                    help="Path to envoy.yaml (fallback when xDS is unavailable)")
     ap.add_argument("--promote", metavar="SERVICE", help="advance SERVICE to the next canary stage and exit")
     ap.add_argument("--current", type=int, default=STAGES[0])
+    ap.add_argument("--use-xds", action="store_true", default=bool(os.environ.get("ENVOY_ADMIN_URL")),
+                    help="Use Envoy admin /runtime_modify (xDS) instead of editing envoy.yaml")
     args = ap.parse_args()
     if args.promote:
         promote(args.envoy_config, args.promote, args.current)

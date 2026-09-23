@@ -45,7 +45,7 @@ COMPENSATING_VERBS = set(COMPENSATION_LEXICON.values()) | {"rollback", "cancel",
 READ_VERBS = {"find", "get", "list", "fetch", "load", "read", "lookup", "search", "compute", "calculate", "validate"}
 
 SQLA_IMPORT = (
-    "from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text\n"
+    "from sqlalchemy import BigInteger, Boolean, Column, Date, DateTime, Enum, Float, ForeignKey, Integer, JSON, Numeric, SmallInteger, String, Text, Time\n"
     "from sqlalchemy.orm import declarative_base, relationship\n\n"
     "Base = declarative_base()\n"
 )
@@ -130,9 +130,15 @@ class DataAgent(BaseAgent):
                 ref_owner = owner_of_table.get(ref_table)
                 if ref_owner is None or ref_owner == owner:
                     continue
+                is_cascade = bool(col.ondelete and col.ondelete.upper() == "CASCADE")
                 after = sever_column_source(col.source, self.config.uuid_refs)
                 after += f"  # soft reference -> {ref_owner}.{col.foreign_key}"
+                if is_cascade:
+                    after += " [CASCADE DELETED REMOVED: requires domain event handler or saga]"
                 sql = [f"ALTER TABLE {ent.table} DROP CONSTRAINT IF EXISTS {ent.table}_{col.name}_fkey;"]
+                if is_cascade:
+                    sql.append(f"-- WARNING: On-delete CASCADE severed across boundary ({ent.table} -> {col.foreign_key}).")
+                    sql.append(f"-- Application must subscribe to '{ref_owner}.deleted' events or invoke compensating saga.")
                 if self.config.uuid_refs:
                     sql.append(f"ALTER TABLE {ent.table} ALTER COLUMN {col.name} TYPE VARCHAR(36);")
                 sql.append(f"CREATE INDEX IF NOT EXISTS ix_{ent.table}_{col.name} ON {ent.table} ({col.name});")
@@ -146,7 +152,8 @@ class DataAgent(BaseAgent):
                         before=col.source,
                         after=after,
                         migration_sql="\n".join(sql),
-                        risk=RiskLevel.HIGH if not col.nullable else RiskLevel.MEDIUM,
+                        cascade_delete=is_cascade,
+                        risk=RiskLevel.CRITICAL if is_cascade else (RiskLevel.HIGH if not col.nullable else RiskLevel.MEDIUM),
                     )
                 )
         return severed
@@ -330,7 +337,8 @@ class DataAgent(BaseAgent):
             lines.append(f"- {svc}: {', '.join(tables)}")
         lines.append("severed foreign keys:")
         for f in plan.severed_foreign_keys:
-            lines.append(f"- {f.table}.{f.column} -> {f.references} ({f.owner_service} -> {f.references_service}, nullable risk {f.risk})")
+            cascade_flag = " [CASCADE]" if f.cascade_delete else ""
+            lines.append(f"- {f.table}.{f.column} -> {f.references} ({f.owner_service} -> {f.references_service}, risk {f.risk}{cascade_flag})")
         lines.append("sagas:")
         for s in plan.sagas:
             steps = " -> ".join(f"{st.name}@{st.service}[comp={st.compensation}{'' if st.compensation_exists else '?'}]" for st in s.steps)

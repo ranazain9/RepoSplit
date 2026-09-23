@@ -31,10 +31,15 @@ dependencies = [
   "cryptography>=42",
   "fastapi>=0.111",
   "uvicorn[standard]>=0.29",
+  "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=1.0"]
+langchain = [
+  "langchain-core>=0.3",
+  "langchain-groq>=0.2",
+]
 dev = [
   "pytest>=8",
   "pytest-asyncio>=0.23",
@@ -43,7 +48,7 @@ dev = [
   "flask-sqlalchemy>=3.1",
   "sqlalchemy>=2.0",
 ]
-all = ["reposplit[anthropic,dev]"]
+all = ["reposplit[anthropic,langchain,dev]"]
 
 [project.scripts]
 reposplit = "reposplit.cli:app"

@@ -44,6 +44,32 @@ def build_openapi(contract: ServiceContract, propagated_headers: list[str]) -> d
         {"name": h, "in": "header", "required": h == "traceparent", "schema": {"type": "string"}} for h in propagated_headers
     ]
     for ep in contract.endpoints:
+        if ep.response_fields:
+            resp_name = f"{to_pascal(ep.operation_id)}Response"
+            schemas[resp_name] = {
+                "type": "object",
+                "properties": {f: {"type": json_type(f, None)} for f in ep.response_fields},
+            }
+            resp_schema = {"$ref": f"#/components/schemas/{resp_name}"}
+        else:
+            resp_schema = {"type": "object"}
+
+        codes = list(ep.status_codes) or ([201] if ep.method == "POST" and ep.exposure == "public" else [200])
+        if ep.method == "POST" and ep.exposure == "public" and 201 not in codes and 200 not in codes:
+            codes.append(201)
+
+        responses: dict[str, Any] = {}
+        for code in sorted(codes):
+            desc = "Created" if code == 201 else ("OK" if code == 200 else ("Not Found" if code == 404 else ("Bad Request" if code == 400 else "Success")))
+            responses[str(code)] = {
+                "description": desc,
+                "content": {"application/json": {"schema": resp_schema}},
+            }
+        responses["4XX"] = {
+            "description": "Client error",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}},
+        }
+
         op: dict[str, Any] = {
             "operationId": ep.operation_id,
             "tags": [ep.exposure],
@@ -55,18 +81,13 @@ def build_openapi(contract: ServiceContract, propagated_headers: list[str]) -> d
                     for p in ep.path_params
                 ],
             ],
-            "responses": {
-                "200": {"description": "OK", "content": {"application/json": {"schema": {"type": "object"}}}},
-                "4XX": {"description": "Client error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
-            },
+            "responses": responses,
         }
         body = _body_schema(ep)
         if body:
             name = f"{to_pascal(ep.operation_id)}Request"
             schemas[name] = body
             op["requestBody"] = {"required": True, "content": {"application/json": {"schema": {"$ref": f"#/components/schemas/{name}"}}}}
-        if ep.method == "POST" and ep.exposure == "public":
-            op["responses"]["201"] = {"description": "Created", "content": {"application/json": {"schema": {"type": "object"}}}}
         paths.setdefault(ep.path, {})[ep.method.lower()] = op
     schemas["Error"] = {"type": "object", "properties": {"error": {"type": "string"}}, "required": ["error"]}
     return {
@@ -109,8 +130,11 @@ def build_proto(contract: ServiceContract) -> str:
         lines.append("}")
         lines.append("")
         lines.append(f"message {op}Response {{")
-        lines.append("  string payload_json = 1;  // TODO(team): replace with typed fields from the response model")
+        lines.append("  string payload_json = 1;  // Legacy raw JSON payload fallback")
         lines.append("  int32 status_code = 2;")
+        if ep.response_fields:
+            for idx, rf in enumerate(ep.response_fields, start=3):
+                lines.append(f"  {proto_type(rf, None)} {rf} = {idx};")
         lines.append("}")
         lines.append("")
     return "\n".join(lines)

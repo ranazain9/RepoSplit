@@ -62,6 +62,8 @@ class ContractAgent(BaseAgent):
                             body_keys=n.body_keys,
                             path_params=[p for p, _ in path_params],
                             response_type=n.returns or "object",
+                            response_fields=n.route.response_fields if n.route else [],
+                            status_codes=n.route.status_codes if n.route else [],
                             source_symbol=sid,
                         )
                     )
@@ -83,6 +85,8 @@ class ContractAgent(BaseAgent):
             seen.add(key)
             short = service_short(dst_svc)
             if edge.kind == "call" and target.kind == "function":
+                resp_fields = target.route.response_fields if target.route else []
+                status_codes = target.route.status_codes if target.route else [200]
                 endpoints[dst_svc].append(
                     EndpointContract(
                         service=dst_svc,
@@ -93,6 +97,8 @@ class ContractAgent(BaseAgent):
                         params=target.params,
                         body_keys=[p.name for p in target.params],
                         response_type=target.returns or "object",
+                        response_fields=resp_fields,
+                        status_codes=status_codes,
                         source_symbol=target.id,
                         callers=[src_svc],
                     )
@@ -109,6 +115,8 @@ class ContractAgent(BaseAgent):
                         params=[ParamSpec(name="id", type_hint="int")],
                         path_params=["id"],
                         response_type=target.name,
+                        response_fields=[],
+                        status_codes=[200, 404],
                         source_symbol=target.id,
                         callers=[src_svc],
                     )

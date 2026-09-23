@@ -11,13 +11,15 @@ generated clients re-emit them on every downstream call:
 `traceparent` follows the W3C Trace Context spec so IBM Instana / OpenTelemetry can stitch the
 distributed trace across the severed services.
 
-TODO(team): validate the JWT in `Authorization` and derive X-User-Id / X-Tenant-Id from its claims
-instead of trusting the inbound headers at the edge.
+JWT validation (optional): set JWT_SECRET env var to enable HS256 signature verification.
+When set, X-User-Id and X-Tenant-Id are derived from JWT claims (sub, tenant_id) rather than
+trusted inbound headers. When not set, headers are forwarded as-is (suitable for demo/dev).
 """
 
 from __future__ import annotations
 
 import contextvars
+import os
 import secrets
 from dataclasses import dataclass, field
 
@@ -25,6 +27,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
 PROPAGATED_HEADERS = [{% for h in headers %}"{{ h }}"{{ ", " if not loop.last }}{% endfor %}]
+
+_JWT_SECRET = os.environ.get("JWT_SECRET", "")
 
 
 @dataclass
@@ -60,11 +64,36 @@ def current_context() -> SecurityContext:
         return ctx
 
 
+def _validate_jwt(token: str) -> tuple[str | None, str | None]:
+    """Validate a HS256 JWT and return (user_id, tenant_id). Returns (None, None) on failure."""
+    try:
+        import jwt  # PyJWT
+
+        claims = jwt.decode(token, _JWT_SECRET, algorithms=["HS256"])
+        return str(claims.get("sub") or ""), str(claims.get("tenant_id") or "")
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
 class SecurityContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        # Start with header-forwarded values (always available)
+        user_id = request.headers.get("X-User-Id")
+        tenant_id = request.headers.get("X-Tenant-Id")
+
+        # If JWT_SECRET is configured, validate the Authorization token and override
+        if _JWT_SECRET:
+            auth = request.headers.get("Authorization", "")
+            if auth.lower().startswith("bearer "):
+                jwt_user, jwt_tenant = _validate_jwt(auth[7:])
+                if jwt_user is not None:
+                    user_id = jwt_user or user_id
+                if jwt_tenant is not None:
+                    tenant_id = jwt_tenant or tenant_id
+
         ctx = SecurityContext(
-            user_id=request.headers.get("X-User-Id"),
-            tenant_id=request.headers.get("X-Tenant-Id"),
+            user_id=user_id,
+            tenant_id=tenant_id,
             traceparent=request.headers.get("traceparent") or new_traceparent(),
             extra={h: request.headers[h] for h in PROPAGATED_HEADERS if h in request.headers and h not in ("X-User-Id", "X-Tenant-Id", "traceparent")},
         )

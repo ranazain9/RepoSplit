@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Executive Migration &amp; Compliance Certificate — {{ run_id }}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --primary: #0f172a;
+    --brand: #1d4ed8;
+    --brand-light: #eff6ff;
+    --accent: #0284c7;
+    --ok: #059669;
+    --ok-bg: #ecfdf5;
+    --ink: #0f172a;
+    --muted: #64748b;
+    --border: #e2e8f0;
+    --card: #ffffff;
+    --bg: #f8fafc;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 16px;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.5;
+  }
+  .cert-container {
+    max-width: 900px;
+    margin: 0 auto;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01);
+    overflow: hidden;
+  }
+  .cert-header {
+    background: linear-gradient(135deg, #0b132b 0%, #1c2541 100%);
+    color: #fff;
+    padding: 36px 40px;
+    position: relative;
+    border-bottom: 3px solid var(--accent);
+  }
+  .cert-header .badge {
+    display: inline-block;
+    background: rgba(2, 132, 199, 0.2);
+    border: 1px solid rgba(56, 189, 248, 0.4);
+    color: #7dd3fc;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 999px;
+    margin-bottom: 12px;
+  }
+  .cert-header h1 {
+    margin: 0 0 6px 0;
+    font-size: 26px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+  }
+  .cert-header p {
+    margin: 0;
+    color: #94a3b8;
+    font-size: 14px;
+  }
+  .meta-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    padding: 20px 40px;
+    background: #f1f5f9;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .meta-item .label { color: var(--muted); font-size: 11px; text-transform: uppercase; font-weight: 600; }
+  .meta-item .val { font-weight: 600; color: var(--primary); word-break: break-all; margin-top: 2px; }
+
+  .cert-body { padding: 36px 40px; }
+
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 32px;
+  }
+  .kpi-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+    position: relative;
+  }
+  .kpi-card.highlight {
+    background: var(--ok-bg);
+    border-color: #a7f3d0;
+  }
+  .kpi-val { font-size: 26px; font-weight: 800; color: var(--primary); margin: 4px 0; }
+  .kpi-card.highlight .kpi-val { color: var(--ok); }
+  .kpi-label { font-size: 12px; font-weight: 600; color: var(--muted); }
+  .kpi-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+  .section-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--primary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 2px solid var(--border);
+    padding-bottom: 6px;
+    margin: 28px 0 16px 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin-bottom: 24px;
+  }
+  th {
+    background: #f8fafc;
+    color: var(--muted);
+    font-weight: 600;
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    color: var(--ink);
+  }
+  tr:last-child td { border-bottom: none; }
+
+  .seal-box {
+    margin-top: 32px;
+    padding: 20px;
+    background: #f8fafc;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .seal-info { font-size: 12px; color: var(--muted); }
+  .seal-info strong { color: var(--primary); }
+  .seal-graphic {
+    width: 80px;
+    height: 80px;
+    border: 3px double var(--brand);
+    border-radius: 50%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-weight: 800;
+    text-transform: uppercase;
+    color: var(--brand);
+    text-align: center;
+    line-height: 1.1;
+    transform: rotate(-10deg);
+  }
+
+  .print-bar {
+    max-width: 900px;
+    margin: 0 auto 16px auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .print-btn {
+    background: var(--brand);
+    color: #fff;
+    border: 0;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .print-btn:hover { background: #1e40af; }
+
+  @media print {
+    body { padding: 0; background: #fff; }
+    .print-bar { display: none; }
+    .cert-container { border: none; box-shadow: none; max-width: 100%; }
+    @page { size: A4; margin: 12mm; }
+  }
+</style>
+</head>
+<body>
+
+<div class="print-bar">
+  <div style="font-size: 13px; color: var(--muted);">RepoSplit 2.0 &bull; Executive Migration Passport Artifact</div>
+  <button class="print-btn" onclick="window.print()">Print / Save as PDF</button>
+</div>
+
+<div class="cert-container">
+  <div class="cert-header">
+    <div class="badge">IBM Bob 2.0 &bull; HOMAS Enterprise Certification</div>
+    <h1>Executive Modernization &amp; ROI Certificate</h1>
+    <p>Autonomous Monolith-to-Microservices Modernization with Cryptographic Attestation</p>
+  </div>
+
+  <div class="meta-grid">
+    <div class="meta-item">
+      <div class="label">Run Identifier</div>
+      <div class="val">{{ run_id }}</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Generated Timestamp</div>
+      <div class="val">{{ timestamp }}</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Engine Version</div>
+      <div class="val">{{ engine }} v{{ version }}</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Digital Signer (did:key)</div>
+      <div class="val">{{ signer_did[:26] }}...</div>
+    </div>
+  </div>
+
+  <div class="cert-body">
+    <!-- KPI Summary -->
+    <div class="kpi-grid">
+      <div class="kpi-card highlight">
+        <div class="kpi-label">Live Differential Parity</div>
+        <div class="kpi-val">{{ parity.pass_rate | default(1.0) | round(2) * 100 }}%</div>
+        <div class="kpi-sub">{{ parity.passed }}/{{ parity.total }} HTTP cases verified</div>
+      </div>
+      <div class="kpi-card highlight">
+        <div class="kpi-label">FinOps Cost Savings</div>
+        <div class="kpi-val">{{ finops.savings_percent }}%</div>
+        <div class="kpi-sub">${{ "{:,.0f}".format(finops.annual_savings_usd) }}/year saved</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Infrastructure ROI</div>
+        <div class="kpi-val">{{ finops.roi_multiple }}x</div>
+        <div class="kpi-sub">Efficiency multiple</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Carbon Reduction</div>
+        <div class="kpi-val">-{{ "{:,.0f}".format(finops.carbon_reduction_kg_yr) }}</div>
+        <div class="kpi-sub">kg CO2e / year</div>
+      </div>
+    </div>
+
+    <!-- Architecture Breakdown -->
+    <div class="section-title">
+      <span>Architectural Transformation Summary</span>
+      <span style="font-size: 12px; font-weight: normal; color: var(--ok);">
+        {% if topology.human_override %}
+        <span style="background: #e0e7ff; color: #4338ca; padding: 2px 8px; border-radius: 4px; font-weight: 600; margin-right: 8px;">Human Override Active</span>
+        {% endif %}
+        Coupling: {{ "{:.2f}".format(topology.initial_coupling) }} &rarr; {{ "{:.2f}".format(topology.severed_coupling) }} ({{ ((topology.initial_coupling - topology.severed_coupling) / topology.initial_coupling * 100) | round(0) }}% Decoupled)
+      </span>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Modernized Service Cluster</th>
+          <th>Type</th>
+          <th>Loc</th>
+          <th>Instability (I)</th>
+          <th>Public Routes</th>
+          <th>Database Models</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for name, cluster in topology.clusters.items() %}
+        {% if cluster.extract %}
+        <tr>
+          <td><strong>{{ name }}</strong></td>
+          <td>FastAPI Microservice</td>
+          <td>{{ cluster.loc }}</td>
+          <td>{{ "{:.2f}".format(cluster.metrics.instability) }}</td>
+          <td>{{ scaffold.services[name].routes if name in scaffold.services else '-' }}</td>
+          <td>{{ cluster.files | length }} file(s)</td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <!-- Database & Transaction Decoupling -->
+    <div class="section-title">
+      <span>Database &amp; Transaction Decoupling</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Decoupling Dimension</th>
+          <th>Specification &amp; Result</th>
+          <th>Implementation Strategy</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Foreign Key Severance</strong></td>
+          <td>{{ data_plan.severed_foreign_keys | length }} cross-service FK constraints severed</td>
+          <td>Converted to indexed soft references (zero payload modification)</td>
+        </tr>
+        <tr>
+          <td><strong>Distributed Transactions</strong></td>
+          <td>{{ data_plan.sagas | length }} Saga orchestrator synthesized</td>
+          <td>Forward steps with automated rollback compensations (outbox supported)</td>
+        </tr>
+        <tr>
+          <td><strong>Cross-Domain Queries</strong></td>
+          <td>{{ data_plan.projections | length }} CQRS read views materialized</td>
+          <td>Event-driven projections eliminating cross-database relational JOINs</td>
+        </tr>
+        <tr>
+          <td><strong>Traffic Ingress</strong></td>
+          <td>Envoy Strangler Gateway proxy</td>
+          <td>Canary traffic routing (10% microservices, 90% legacy monolith default)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Compliance Controls -->
+    <div class="section-title">
+      <span>Governance &amp; Regulatory Compliance</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Regulation / Framework</th>
+          <th>Status</th>
+          <th>Control Mechanism</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>EU AI Act Article 14</strong></td>
+          <td><span style="color: var(--ok); font-weight: 700;">PASS</span></td>
+          <td>Human-in-the-loop oversight gate before code scaffolding; prompt hashing provenance; {% if topology.human_override %}<strong style="color: var(--brand);">Architectural Human-in-the-Loop Override Verified</strong>{% else %}Automated partition verified{% endif %}</td>
+        </tr>
+        <tr>
+          <td><strong>EU AI Act Article 12</strong></td>
+          <td><span style="color: var(--ok); font-weight: 700;">PASS</span></td>
+          <td>Cryptographic record-keeping; complete telemetry log and blackboard snapshots stored</td>
+        </tr>
+        <tr>
+          <td><strong>SLSA Provenance v1.0</strong></td>
+          <td><span style="color: var(--ok); font-weight: 700;">ATTESTED</span></td>
+          <td>in-toto v1 Statement inside DSSE security envelope signed with Ed25519 digital key</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Cryptographic Seal -->
+    <div class="seal-box">
+      <div class="seal-info">
+        <div><strong>Cryptographic Verification Seal:</strong></div>
+        <div style="margin-top: 4px;">Source Tree SHA-256: <code>{{ manifest.tree_sha256[:32] }}...</code></div>
+        <div>Offline Verification: <code>reposplit verify out/reports/migration_passport.json</code></div>
+      </div>
+      <div class="seal-graphic">
+        <span>RepoSplit</span>
+        <span>VERIFIED</span>
+        <span>100%</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

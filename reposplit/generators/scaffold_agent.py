@@ -102,6 +102,7 @@ class ScaffoldAgent(BaseAgent):
                     ),
                 ),
                 self._write(f"{base}/app/models.py", self._models_source(svc)),
+                self._write(f"{base}/app/outbox.py", self._outbox_source()),
                 self._write(f"{base}/app/legacy_reference.py", self._legacy_reference(porter, fn_nodes, svc)),
                 self._write(f"{base}/Dockerfile", render("service/Dockerfile.j2", port=contract.port)),
                 self._write(f"{base}/requirements.txt", render("service/requirements.txt.j2")),
@@ -118,7 +119,10 @@ class ScaffoldAgent(BaseAgent):
             if notes:
                 self.log(f"{svc}: {len(notes)} porting note(s)", level="warning", notes=notes)
 
-        monolith_context = os.path.relpath(self.ctx.repo_root, self.ctx.output_dir).replace("\\", "/")
+        try:
+            monolith_context = os.path.relpath(self.ctx.repo_root, self.ctx.output_dir).replace("\\", "/")
+        except ValueError:
+            monolith_context = Path(self.ctx.repo_root).resolve().as_posix()
         compose = self._write(
             "docker-compose.yml",
             render(
@@ -135,6 +139,12 @@ class ScaffoldAgent(BaseAgent):
         self._write("helm/reposplit/values.yaml", render("helm/values.yaml.j2", **helm_ctx))
         self._write("helm/reposplit/templates/deployment.yaml", render("helm/deployment.yaml.j2", **helm_ctx))
         self._write("helm/reposplit/templates/route.yaml", render("helm/route.yaml.j2", **helm_ctx))
+
+        from reposplit.generators.cdc import CDCGenerator
+
+        cdc_gen = CDCGenerator(self.ctx.output_dir, data_plan, topology)
+        for cdc_file in cdc_gen.generate():
+            self.bb.register_artifact(cdc_file)
 
         manifest = ScaffoldManifest(
             services=scaffolded, compose_file=compose, helm_chart="helm/reposplit", monolith_context=monolith_context
@@ -196,3 +206,16 @@ class ScaffoldAgent(BaseAgent):
     @property
     def output(self) -> Path:
         return self.ctx.output_dir
+
+    @staticmethod
+    def _outbox_source() -> str:
+        return (
+            '"""Transactional Outbox event publisher."""\n\n'
+            "from __future__ import annotations\n\n"
+            "import logging\n"
+            "from typing import Any\n\n"
+            'logger = logging.getLogger("reposplit.outbox")\n\n\n'
+            "def publish_event(event_type: str, payload: dict[str, Any]) -> None:\n"
+            '    logger.info("Outbox event published: %s -> %s", event_type, payload.get("id"))\n'
+        )
+

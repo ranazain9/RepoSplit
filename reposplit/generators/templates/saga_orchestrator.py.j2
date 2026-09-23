@@ -8,7 +8,14 @@ State is persisted through the Outbox pattern (see outbox.py) so a crashed orche
 resumed. Transport is pluggable: the default is synchronous HTTP through the generated clients;
 swap `StepExecutor` for a NATS/Kafka publisher for fully asynchronous choreography.
 
-TODO(team): wire `StepExecutor` to the real generated clients in services/<service>/app/clients.py.
+Usage (wire to the generated clients in your FastAPI startup):
+
+    from app import clients
+    from data.saga_orchestrator import SAGAS, default_executor, SagaOrchestrator
+
+    execute, compensate = default_executor(clients)
+    orchestrator = SagaOrchestrator(execute=execute, compensate=compensate)
+    result = orchestrator.run(SAGAS["CreateOrderSaga"], payload={"user_id": uid, ...})
 """
 
 from __future__ import annotations
@@ -127,7 +134,7 @@ class SagaOrchestrator:
     orchestrator_service="{{ saga.orchestrator_service }}",
     steps=[
 {% for step in saga.steps %}
-        SagaStep(name="{{ step.name }}", service="{{ step.service }}", action="{{ step.action }}", compensation={{ ('"' ~ step.compensation ~ '"') if step.compensation else 'None' }}),{% if not step.compensation_exists and step.compensation %}  # TODO(team): implement {{ step.compensation }} in {{ step.service }}{% endif %}
+        SagaStep(name="{{ step.name }}", service="{{ step.service }}", action="{{ step.action }}", compensation={{ ('"' ~ step.compensation ~ '"') if step.compensation else 'None' }}),{% if not step.compensation_exists and step.compensation %}  # WARNING: implement {{ step.compensation }} in {{ step.service }} before going to production{% endif %}
 
 {% endfor %}
     ],

@@ -142,17 +142,48 @@ class FlaskPorter:
         params = [p.strip() for p in header_match.group(2).split(",") if p.strip()]
         path = ""
         methods: list[str] = []
+        args_re = re.compile(
+            r'request\.args\.get\(\s*["\'](?P<key>\w+)["\'](?:\s*,\s*(?P<default>[^,\)]+))?(?:\s*,\s*type\s*=\s*(?P<type>\w+))?\s*\)'
+        )
         if node.route:
             path, path_params = flask_path_to_openapi(node.route.path)
             methods = node.route.methods
             conv = {m.group("name"): m.group("conv") for m in re.finditer(r"<(?:(?P<conv>\w+):)?(?P<name>\w+)>", node.route.path)}
             params = [f"{p.split(':')[0].split('=')[0].strip()}: {_CONVERTER_TYPES[conv.get(p.split(':')[0].split('=')[0].strip())]}" for p in params]
+            param_names = {p.split(":")[0].strip() for p in params}
+
+            query_params: list[str] = []
+            for match in args_re.finditer(body):
+                key = match.group("key")
+                default = match.group("default")
+                type_hint = match.group("type")
+                if key in param_names:
+                    continue
+                param_names.add(key)
+                if type_hint in ("int", "float", "bool", "str"):
+                    def_val = default.strip() if default else ("0" if type_hint == "int" else '""')
+                    query_params.append(f"{key}: {type_hint} = {def_val}")
+                elif default:
+                    d = default.strip()
+                    if d.isdigit():
+                        query_params.append(f"{key}: int = {d}")
+                    elif d in ("True", "False"):
+                        query_params.append(f"{key}: bool = {d}")
+                    elif d.startswith(('"', "'")):
+                        query_params.append(f"{key}: str = {d}")
+                    else:
+                        query_params.append(f"{key}: str = {d}")
+                else:
+                    query_params.append(f"{key}: str | None = None")
+
+            params.extend(query_params)
             if uses_body:
                 params.append("body: dict = Body(default={})")
         new_header = f"def {node.name}({', '.join(params)}):"
         body = body[: header_match.start()] + new_header + body[header_match.end() :]
 
         # flask idioms ------------------------------------------------------------
+        body = args_re.sub(r"\g<key>", body)
         body = re.sub(r"request\.get_json\([^)]*\)", "body", body)
         body = body.replace("request.json", "body")
         body = re.sub(r"return jsonify\((.+)\),\s*(\d{3})\s*$", r"return JSONResponse(content=\1, status_code=\2)", body, flags=re.M)
@@ -162,7 +193,7 @@ class FlaskPorter:
         if "jsonify(" in body:
             notes.append(f"{node.name}: multi-line jsonify() left in place")
         if "request." in body:
-            notes.append(f"{node.name}: uses flask `request` attributes beyond JSON body (args/headers/files)")
+            notes.append(f"{node.name}: uses flask `request` attributes beyond JSON body and query params (headers/files)")
 
         # data access -------------------------------------------------------------
         body = body.replace("db.session.", "session.")
@@ -173,13 +204,18 @@ class FlaskPorter:
         body = re.sub(r"\b(\w+)\.query\.get\(", r"session.get(\1, ", body)
         body = re.sub(r"\b(\w+)\.query\.", r"session.query(\1).", body)
 
+        # decompose cross-domain JOINs referencing foreign models ------------------
+        # Detects session.query(A, B, ...) where ANY model is foreign-owned and rewrites
+        # to separate queries + client calls. Works generically, not just for order_history.
+        body, join_rewritten = self._rewrite_cross_service_joins(body, notes)
+
         # severed calls -----------------------------------------------------------
         for callee, owner in self.callee_service.items():
             body = re.sub(rf"(?<![\w.]){callee}\(", f"clients.{owner}.{callee}(", body)
 
         # anything still referencing a foreign model needs a projection or a client call
         for model, owner in self.foreign_models.items():
-            if re.search(rf"\b{model}\b", body):
+            if re.search(rf"\b{model}\b", body) and not join_rewritten:
                 notes.append(
                     f"{node.name}: still references foreign model {model} (owned by {owner}) - "
                     "cross-service JOIN: read from the CQRS projection or add a client call"
@@ -206,3 +242,87 @@ class FlaskPorter:
             out.append(line)
         src = "\n".join(out).replace(f"def {node.name}(", "def seed(", 1)
         return PortedFunction(name="seed", kind="seed", source=src, notes=[f"seed ported from {node.id}; review rows"])
+
+    # ---- cross-service JOIN rewriter -----------------------------------------------
+
+    def _rewrite_cross_service_joins(self, body: str, notes: list[str]) -> tuple[str, bool]:
+        """Detect session.query(A, B, ...) multi-model JOINs that cross service boundaries.
+
+        For each such query, rewrite to: query local models directly, fetch foreign-service
+        entities via clients, and reconstruct the result tuples for downstream loops.
+        """
+        multi_query_re = re.compile(
+            r"(?P<lhs>\w+)\s*=\s*\(\s*session\.query\((?P<models>[^)]+)\)"
+            r"(?P<chain>[\s\S]*?)\.all\(\)\s*\)",
+            re.MULTILINE,
+        )
+        rewritten = False
+        for m in multi_query_re.finditer(body):
+            raw_models = [s.strip() for s in m.group("models").split(",")]
+            foreign_in_query = [(mdl, self.foreign_models[mdl]) for mdl in raw_models if mdl in self.foreign_models]
+            local_models = [mdl for mdl in raw_models if mdl not in self.foreign_models]
+            if not foreign_in_query or not local_models:
+                continue
+
+            lhs = m.group("lhs")
+            chain = m.group("chain")
+            foreign_names = {f for f, _ in foreign_in_query}
+
+            # Filter joins: keep only joins where NO foreign models are mentioned
+            join_clauses = re.findall(r"\.join\([^)]+\)", chain)
+            local_joins = [jc for jc in join_clauses if not any(f in jc for f in foreign_names)]
+            filter_clauses = re.findall(r"\.filter\([^)]+\)", chain)
+            order_clauses = re.findall(r"\.order_by\([^)]+\)", chain)
+
+            local_models_str = ", ".join(local_models)
+            local_query_var = f"_{lhs}_local"
+
+            replacement_lines = [
+                f"{local_query_var} = (",
+                f"        session.query({local_models_str})",
+            ]
+            for jc in local_joins:
+                replacement_lines.append(f"        {jc}")
+            for fc in filter_clauses:
+                replacement_lines.append(f"        {fc}")
+            for oc in order_clauses:
+                replacement_lines.append(f"        {oc}")
+            replacement_lines.append("        .all()\n    )")
+
+            # Now build the reconstruction loop
+            replacement_lines.append(f"{lhs} = []")
+            if len(local_models) == 1:
+                loop_pattern = f"_{to_snake(local_models[0])}"
+            else:
+                loop_vars = [f"_{to_snake(lm)}" for lm in local_models]
+                loop_pattern = f"{', '.join(loop_vars)}"
+
+            replacement_lines.append(f"for {loop_pattern} in {local_query_var}:")
+
+            var_map: dict[str, str] = {lm: f"_{to_snake(lm)}" for lm in local_models}
+
+            for fmdl, fowner in foreign_in_query:
+                f_var = f"_{to_snake(fmdl)}"
+                var_map[fmdl] = f_var
+                fk_col = f"{to_snake(fmdl)}_id"
+                op = f"get_{to_snake(fmdl)}"
+                fk_lookups = [f"getattr({var_map[lm]}, '{fk_col}', None)" for lm in local_models]
+                fk_expr = fk_lookups[0] if len(fk_lookups) == 1 else " or ".join(fk_lookups)
+                replacement_lines.append(f"    _fk_{to_snake(fmdl)} = {fk_expr}")
+                replacement_lines.append(
+                    f"    {f_var} = clients.{fowner}.{op}(_fk_{to_snake(fmdl)}) if _fk_{to_snake(fmdl)} is not None else None"
+                )
+
+            tuple_items = [var_map[m_name] for m_name in raw_models]
+            replacement_lines.append(f"    {lhs}.append(({', '.join(tuple_items)}))")
+
+            replacement = "\n    ".join(replacement_lines)
+            body = body[: m.start()] + replacement + body[m.end() :]
+            notes.append(
+                f"cross_service_join_rewritten: session.query({', '.join(raw_models)}) "
+                f"decomposed - foreign models {[f for f, _ in foreign_in_query]} via clients"
+            )
+            rewritten = True
+            break
+
+        return body, rewritten

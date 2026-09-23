@@ -114,6 +114,57 @@ class Supervisor:
         self.bb.record(self.fsm.state, SUPERVISOR, "human approval received", level="success")
         self.ctx.approval.set()
 
+    @classmethod
+    def from_snapshot(cls, snapshot_path: str | Path, config: RunConfig) -> Supervisor:
+        """Reconstruct a Supervisor from a saved blackboard snapshot.
+
+        Advances the FSM to the phase after the last completed one so the run
+        continues from where it left off. Called by the CLI when --resume is set.
+        """
+        from pathlib import Path as _Path
+
+        from reposplit.core.blackboard import Blackboard
+        from reposplit.core.schemas import Keys
+
+        snapshot_path = _Path(snapshot_path)
+        bb = Blackboard.load(snapshot_path)
+
+        supervisor = cls(config, blackboard=bb, run_id=bb.run_id)
+
+        # Determine which phases are complete by checking which keys exist on the blackboard
+        phase_keys = [
+            (Phase.ARCHITECT, Keys.TOPOLOGY),
+            (Phase.DATA, Keys.DATA_PLAN),
+            (Phase.CONTRACT, Keys.CONTRACT_PLAN),
+            (Phase.STRANGLER, Keys.GATEWAY_PLAN),
+            (Phase.SCAFFOLD, Keys.SCAFFOLD_MANIFEST),
+            (Phase.PARITY, Keys.PARITY_REPORT),
+            (Phase.GOVERNANCE, Keys.PASSPORT),
+        ]
+        last_done = Phase.INGEST
+        for phase, key in phase_keys:
+            if bb.has(key):
+                last_done = phase
+            else:
+                break
+
+        # Advance the FSM to the last completed phase so the pipeline can pick up from the next
+        if last_done != Phase.INGEST:
+            import contextlib
+            with contextlib.suppress(Exception):
+                supervisor.fsm.advance(last_done, f"restored from snapshot (last complete: {last_done})")
+
+        # If the approval gate was already passed, set the event so we don't block
+        if bb.has(Keys.SCAFFOLD_MANIFEST) or not config.require_approval:
+            supervisor.ctx.approval.set()
+
+        supervisor._log(
+            f"run resumed from snapshot (last completed: {last_done})",
+            level="info",
+            snapshot=str(snapshot_path),
+        )
+        return supervisor
+
     @property
     def phase(self) -> Phase:
         return self.fsm.state

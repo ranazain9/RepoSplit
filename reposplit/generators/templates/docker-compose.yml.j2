@@ -27,6 +27,11 @@ services:
       - {{ svc.service }}
 {% endfor %}
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
 {% for svc in services %}
   {{ svc.service }}:
     build:
@@ -34,6 +39,7 @@ services:
     environment:
       PORT: "{{ svc.port }}"
       DATABASE_URL: sqlite:////data/{{ svc.service }}.sqlite
+      REDIS_URL: redis://redis:6379/0
 {% for dep in svc.downstream %}
       {{ dep | upper }}_URL: http://{{ dep }}:{{ ports[dep] }}
 {% endfor %}

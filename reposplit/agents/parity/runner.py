@@ -35,7 +35,16 @@ class DifferentialRunner:
 
     def _send(self, base: str, case: ParityCase) -> tuple[int, object, float]:
         t0 = time.perf_counter()
-        resp = self._http.request(case.method, base.rstrip("/") + case.path, json=case.payload, headers=case.headers)
+        is_get_or_head = case.method.upper() in ("GET", "HEAD")
+        json_body = None if is_get_or_head else case.payload
+        params = case.payload if is_get_or_head and case.payload else None
+        resp = self._http.request(
+            case.method,
+            base.rstrip("/") + case.path,
+            json=json_body,
+            params=params,
+            headers=case.headers,
+        )
         elapsed = (time.perf_counter() - t0) * 1000
         try:
             body = resp.json()

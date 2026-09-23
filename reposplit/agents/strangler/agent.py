@@ -69,6 +69,13 @@ class StranglerAgent(BaseAgent):
         self.write_artifact("gateway/canary_controller.py", render("canary_controller.py.j2", plan=plan))
         self.write_artifact("reports/canary_migration_plan.md", self._plan_markdown(plan, contracts))
         self.write_artifact("reports/gateway_plan.json", plan)
+
+        # Optional Kong declarative config (gateway=kong or gateway=both)
+        gateway = getattr(self.config, "gateway", "envoy")
+        if gateway in ("kong", "both"):
+            kong_yaml = self._kong_config(plan, contracts)
+            self.write_artifact("gateway/kong.yml", yaml.safe_dump(kong_yaml, sort_keys=False))
+
         return self.ok(
             f"{len(routes)} canary route(s) at {weight}% across {len(stages)} stage(s)",
             routes=len(routes),
@@ -102,9 +109,45 @@ class StranglerAgent(BaseAgent):
         for r in plan.routes:
             # Convert OpenAPI {param} into a safe_regex so Envoy matches the concrete path.
             regex = "^" + "".join("[^/]+" if part.startswith("{") else part for part in _split_keep(r.path)) + "$"
+            clean_name = f"{r.method.lower()}_{r.path.strip('/').replace('/', '_').replace('{', '').replace('}', '')}"
+            # 1. Direct Canary Override (if X-Canary: always|true|1)
             envoy_routes.append(
                 {
-                    "name": f"{r.method.lower()}_{r.path.strip('/').replace('/', '_').replace('{', '').replace('}', '')}",
+                    "name": f"{clean_name}_canary_override",
+                    "match": {
+                        "safe_regex": {"regex": regex},
+                        "headers": [
+                            {"name": ":method", "string_match": {"exact": r.method}},
+                            {"name": "x-canary", "string_match": {"safe_regex": {"regex": "^(?i)(always|true|1)$"}}},
+                        ],
+                    },
+                    "route": {
+                        "cluster": r.service,
+                        "timeout": "15s",
+                    },
+                }
+            )
+            # 2. Direct Monolith Override (if X-Canary: never|false|0)
+            envoy_routes.append(
+                {
+                    "name": f"{clean_name}_monolith_override",
+                    "match": {
+                        "safe_regex": {"regex": regex},
+                        "headers": [
+                            {"name": ":method", "string_match": {"exact": r.method}},
+                            {"name": "x-canary", "string_match": {"safe_regex": {"regex": "^(?i)(never|false|0)$"}}},
+                        ],
+                    },
+                    "route": {
+                        "cluster": "monolith",
+                        "timeout": "15s",
+                    },
+                }
+            )
+            # 3. Standard Weighted Canary (Statistical split)
+            envoy_routes.append(
+                {
+                    "name": clean_name,
                     "match": {
                         "safe_regex": {"regex": regex},
                         "headers": [{"name": ":method", "string_match": {"exact": r.method}}],
@@ -143,13 +186,30 @@ class StranglerAgent(BaseAgent):
                                             "tracing": {"provider": {"name": "envoy.tracers.opentelemetry"}},
                                             "route_config": {
                                                 "name": "strangler_fig",
-                                                "virtual_hosts": [{"name": "shop", "domains": ["*"], "routes": envoy_routes}],
+                                                "virtual_hosts": [
+                                                    {
+                                                        "name": "shop",
+                                                        "domains": ["*"],
+                                                        "cors": {
+                                                            "allow_origin_string_match": [{"safe_regex": {"regex": ".*"}}],
+                                                            "allow_methods": "GET, PUT, POST, DELETE, PATCH, OPTIONS",
+                                                            "allow_headers": "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization,X-User-Id,X-Tenant-Id,traceparent,X-Canary",
+                                                            "expose_headers": "Content-Length,Content-Range,X-Canary-Service",
+                                                            "max_age": "1728000",
+                                                        },
+                                                        "routes": envoy_routes,
+                                                    }
+                                                ],
                                             },
                                             "http_filters": [
                                                 {
+                                                    "name": "envoy.filters.http.cors",
+                                                    "typed_config": {"@type": "type.googleapis.com/envoy.extensions.filters.http.cors.v3.Cors"},
+                                                },
+                                                {
                                                     "name": "envoy.filters.http.router",
                                                     "typed_config": {"@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"},
-                                                }
+                                                },
                                             ],
                                         },
                                     }
@@ -195,6 +255,60 @@ class StranglerAgent(BaseAgent):
             "5. Roll back at any time: set canary weight to 0 - no code deploy required.",
         ]
         return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _kong_config(plan: GatewayPlan, contracts: ContractPlan) -> dict[str, Any]:
+        """Generate a Kong 3.0 declarative YAML config (kong.yml) with canary plugin."""
+        services_cfg: list[dict[str, Any]] = []
+        plugins_cfg: list[dict[str, Any]] = []
+
+        # Group routes by service
+        svc_routes: dict[str, list[GatewayRoute]] = {}
+        for r in plan.routes:
+            svc_routes.setdefault(r.service, []).append(r)
+
+        for svc, svc_route_list in sorted(svc_routes.items()):
+            contract = contracts.services.get(svc)
+            port = contract.port if contract else 8000
+            canary_weight = svc_route_list[0].canary_weight if svc_route_list else 10
+            paths = sorted({r.path for r in svc_route_list})
+            # Normalise OpenAPI {param} -> (?<param>[^/]+) for Kong regex matching
+            kong_paths = []
+            for p in paths:
+                if "{" in p:
+                    import re as _re
+                    kong_paths.append("~" + _re.sub(r"\{(\w+)\}", r"(?<\1>[^/]+)", p))
+                else:
+                    kong_paths.append(p)
+            services_cfg.append({
+                "name": svc,
+                "url": f"http://{svc}:{port}",
+                "routes": [{
+                    "name": f"{svc}-routes",
+                    "paths": kong_paths,
+                    "strip_path": False,
+                }],
+            })
+            # Canary plugin: routes canary_weight% of traffic to the new service
+            plugins_cfg.append({
+                "name": "canary",
+                "service": svc,
+                "config": {
+                    "percentage": canary_weight,
+                    "upstream_host": "monolith",
+                    "upstream_port": 5000,
+                    "upstream_uri": "/",
+                    "hash": "none",
+                },
+            })
+
+        return {
+            "_format_version": "3.0",
+            "_transform": True,
+            "services": services_cfg,
+            "plugins": plugins_cfg,
+        }
+
 
 
 def _split_keep(path: str) -> list[str]:

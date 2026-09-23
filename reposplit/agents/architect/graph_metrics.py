@@ -13,11 +13,20 @@ from pathlib import PurePosixPath
 
 import networkx as nx
 
-from reposplit.core.schemas import CouplingMetrics, DependencyGraph, GraphNode
+from reposplit.core.schemas import (
+    Cluster,
+    CouplingMetrics,
+    DependencyCycle,
+    DependencyGraph,
+    DomainTopology,
+    GraphNode,
+    RiskLevel,
+    SeveredEdge,
+)
 from reposplit.utils.naming import score_domains, tokens
 
 PARTITION_KINDS = {"class", "function"}
-SYMBOL_EDGE_KINDS = {"call", "data_access", "fk", "inherits"}
+SYMBOL_EDGE_KINDS = {"call", "data_access", "fk", "inherits", "transaction"}
 SHARED_KERNEL = "shared_kernel"
 
 
@@ -38,10 +47,11 @@ def symbol_graph(graph: DependencyGraph) -> nx.DiGraph:
     for e in graph.edges:
         if e.kind in SYMBOL_EDGE_KINDS and e.source in g and e.target in g:
             prev = g[e.source][e.target] if g.has_edge(e.source, e.target) else {"weight": 0, "data_weight": 0}
+            w_mult = 5 if e.kind == "transaction" else 1
             g.add_edge(
                 e.source,
                 e.target,
-                weight=prev["weight"] + e.weight,
+                weight=prev["weight"] + e.weight * w_mult,
                 data_weight=prev["data_weight"] + (e.weight if e.kind == "data_access" else 0),
             )
     return g
@@ -231,3 +241,137 @@ def partition_symbols(
 
     members = {name: sorted(m) for name, m in sorted(named.items())}
     return Partition(assignment=assignment, members=members, modularity=round(q, 3))
+
+
+HIGH_RISK_CALL_WEIGHT = 5
+
+
+def edge_risk(kind: str, weight: int) -> RiskLevel:
+    if kind == "transaction":
+        return RiskLevel.CRITICAL
+    if kind in ("fk", "inherits", "data_access"):
+        return RiskLevel.HIGH
+    if weight > HIGH_RISK_CALL_WEIGHT:
+        return RiskLevel.HIGH
+    if weight > 1:
+        return RiskLevel.MEDIUM
+    return RiskLevel.LOW
+
+
+def overall_risk(severed: list[SeveredEdge], cycles: list[DependencyCycle]) -> RiskLevel:
+    highs = sum(1 for s in severed if s.risk == RiskLevel.HIGH)
+    service_cycle = any(all(not m.endswith(".py") for m in c.members) for c in cycles)
+    if highs > 10:
+        return RiskLevel.CRITICAL
+    if service_cycle or highs > 5:
+        return RiskLevel.HIGH
+    if highs > 0 or len(severed) > 5:
+        return RiskLevel.MEDIUM
+    return RiskLevel.LOW
+
+
+def cluster_graph(severed: list[SeveredEdge]) -> nx.DiGraph:
+    g = nx.DiGraph()
+    for s in severed:
+        g.add_edge(s.source_cluster, s.target_cluster)
+    return g
+
+
+def build_domain_topology(
+    graph: DependencyGraph,
+    assignment: dict[str, str],
+    modularity_val: float = 0.0,
+    human_override: bool = False,
+    rationale: str = "",
+) -> DomainTopology:
+    nodes = graph.node_map()
+    g = symbol_graph(graph)
+
+    members: dict[str, list[str]] = defaultdict(list)
+    for sid, cname in assignment.items():
+        members[cname].append(sid)
+
+    clusters: dict[str, Cluster] = {}
+    files_by_cluster: dict[str, set[str]] = defaultdict(set)
+    for cname, symbols in members.items():
+        files = sorted({nodes[s].module for s in symbols if s in nodes})
+        files_by_cluster[cname] = set(files)
+        clusters[cname] = Cluster(
+            name=cname,
+            kind="shared_kernel" if cname == SHARED_KERNEL else "service",
+            files=files,
+            symbols=sorted(symbols),
+            metrics=coupling(g, set(symbols)),
+            loc=sum(nodes[s].loc for s in symbols if s in nodes),
+            extract=cname != SHARED_KERNEL,
+        )
+
+    assigned_files = {f for fs in files_by_cluster.values() for f in fs}
+    orphan_files = sorted(n.module for n in graph.nodes if n.kind == "module" and n.module not in assigned_files)
+    if orphan_files:
+        kernel = clusters.get(SHARED_KERNEL) or Cluster(
+            name=SHARED_KERNEL, kind="shared_kernel", files=[], symbols=[], metrics=coupling(g, set()), extract=False
+        )
+        kernel.files = sorted(set(kernel.files) | set(orphan_files))
+        clusters[SHARED_KERNEL] = kernel
+
+    service_names = {c for c, cl in clusters.items() if cl.kind == "service"}
+    severed: list[SeveredEdge] = []
+    for e in graph.edges:
+        cu, cv = assignment.get(e.source), assignment.get(e.target)
+        if not cu or not cv or cu == cv or cu not in service_names or cv not in service_names:
+            continue
+        severed.append(
+            SeveredEdge(
+                source=e.source,
+                target=e.target,
+                source_cluster=cu,
+                target_cluster=cv,
+                kind=e.kind,
+                weight=e.weight,
+                risk=edge_risk(e.kind, e.weight),
+            )
+        )
+    severed.sort(key=lambda s: (-s.weight, s.source))
+
+    split_files = sorted(
+        f for f in assigned_files if sum(1 for fs in files_by_cluster.values() if f in fs) > 1
+    )
+
+    cycles: list[DependencyCycle] = []
+    cg = cluster_graph(severed)
+    for scc in find_cycles(cg):
+        cycles.append(
+            DependencyCycle(
+                members=scc,
+                resolution="Cyclic service dependency: introduce an event-driven intermediary (outbox event) "
+                "or a shared DTO contract so one direction becomes asynchronous.",
+            )
+        )
+    for scc in find_cycles(module_graph(graph)):
+        cycles.append(
+            DependencyCycle(
+                members=scc,
+                resolution="Circular module import: hoist shared symbols into the shared kernel or use late imports.",
+            )
+        )
+
+    risk = overall_risk(severed, cycles)
+    return DomainTopology(
+        clusters=dict(sorted(clusters.items())),
+        severed_edges=severed,
+        cycles=cycles,
+        split_files=split_files,
+        modularity=modularity_val,
+        initial_coupling=cross_module_fraction(g),
+        severed_coupling=cross_cluster_fraction(g, assignment, service_names),
+        risk_level=risk,
+        human_override=human_override,
+        rationale=rationale
+        or (
+            "Human-in-the-loop architectural override applied over symbol assignments."
+            if human_override
+            else "Louvain community detection over the symbol-level call/data graph; "
+            "infrastructure symbols routed to the shared kernel; tiny communities absorbed by strongest neighbour."
+        ),
+    )

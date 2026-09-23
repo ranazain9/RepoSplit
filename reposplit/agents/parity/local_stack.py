@@ -20,13 +20,19 @@ import httpx
 from reposplit.core.schemas import ContractPlan
 
 
-def free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+def free_port(exclude: set[int] | None = None) -> int:
+    exclude = exclude if exclude is not None else set()
+    for _ in range(50):
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+            if port not in exclude:
+                exclude.add(port)
+                return port
+    return port
 
 
-def _wait_healthy(url: str, timeout: float = 30.0) -> None:
+def _wait_healthy(url: str, timeout: float = 30.0, log_path: Path | None = None) -> None:
     deadline = time.time() + timeout
     last = ""
     while time.time() < deadline:
@@ -38,7 +44,11 @@ def _wait_healthy(url: str, timeout: float = 30.0) -> None:
         except httpx.TransportError as exc:
             last = str(exc)
         time.sleep(0.3)
-    raise RuntimeError(f"{url} did not become healthy: {last}")
+    extra = ""
+    if log_path and log_path.exists():
+        log_text = log_path.read_text(encoding="utf-8", errors="ignore")[-1500:]
+        extra = f"\n--- {log_path.name} ---\n{log_text}"
+    raise RuntimeError(f"{url} did not become healthy: {last}{extra}")
 
 
 @contextmanager
@@ -48,9 +58,10 @@ def local_stack(repo_root: Path, output_dir: Path, contracts: ContractPlan, log_
     tmp = Path(tempfile.mkdtemp(prefix="reposplit-stack-"))
     log_dir = log_dir or tmp
     log_dir.mkdir(parents=True, exist_ok=True)
-    ports = {svc: free_port() for svc in contracts.services}
+    allocated: set[int] = set()
+    ports = {svc: free_port(allocated) for svc in contracts.services}
     service_urls = {svc: f"http://127.0.0.1:{p}" for svc, p in ports.items()}
-    monolith_port = free_port()
+    monolith_port = free_port(allocated)
     monolith_url = f"http://127.0.0.1:{monolith_port}"
     base_env = {k: v for k, v in os.environ.items() if not k.endswith("_URL")}
     base_env["PYTHONUNBUFFERED"] = "1"
@@ -79,13 +90,9 @@ def local_stack(repo_root: Path, output_dir: Path, contracts: ContractPlan, log_
                 output_dir / "services" / svc,
                 env,
             )
-        _wait_healthy(monolith_url)
+        _wait_healthy(monolith_url, log_path=log_dir / "monolith.log")
         for svc, url in service_urls.items():
-            try:
-                _wait_healthy(url)
-            except RuntimeError as exc:
-                log_text = (log_dir / f"{svc}.log").read_text(encoding="utf-8", errors="ignore")[-1500:]
-                raise RuntimeError(f"{exc}\n--- {svc}.log ---\n{log_text}") from exc
+            _wait_healthy(url, log_path=log_dir / f"{svc}.log")
         yield monolith_url, service_urls
     finally:
         for p in procs:

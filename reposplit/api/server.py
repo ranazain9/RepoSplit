@@ -23,9 +23,18 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from reposplit.core.schemas import DependencyGraph, DomainTopology, Keys, Phase, RunConfig
+from reposplit.agents.architect.graph_metrics import build_domain_topology
+from reposplit.core.schemas import (
+    DependencyGraph,
+    DomainTopology,
+    Keys,
+    Phase,
+    RunConfig,
+    TopologyPreviewRequest,
+    TopologyPreviewResponse,
+)
 from reposplit.core.supervisor import Supervisor
 
 STATIC = Path(__file__).parent / "static"
@@ -40,6 +49,8 @@ class StartRun(BaseModel):
     live: bool = False
     require_approval: bool = True
     canary_weight: int = 10
+    manual_assignments: dict[str, str] = Field(default_factory=dict)
+    topology_override: str | None = None
 
 
 @dataclass
@@ -57,13 +68,15 @@ class RunManager:
         run_id = uuid.uuid4().hex[:12]
         config = RunConfig(
             repo_path=req.repo_path,
-            output_dir=req.output_dir or f"out/{run_id}",
+            output_dir=req.output_dir or "out",
             provider=req.provider,  # type: ignore[arg-type]
             mode=req.mode,  # type: ignore[arg-type]
             target_services=req.target_services,
             live=req.live,
             require_approval=req.require_approval,
             canary_weight=req.canary_weight,
+            manual_assignments=req.manual_assignments,
+            topology_override=req.topology_override,
         )
         handle = RunHandle(supervisor=Supervisor(config, run_id=run_id))
         handle.task = asyncio.create_task(handle.supervisor.run())
@@ -179,4 +192,151 @@ def create_app() -> FastAPI:
 
         return describe_agents()
 
+    @app.get("/api/certificate")
+    async def certificate() -> FileResponse:
+        path = Path("out/reports/migration_certificate.html")
+        if not path.exists():
+            raise HTTPException(404, "certificate not generated yet")
+        return FileResponse(path)
+
+    @app.get("/api/latest")
+    async def latest_run() -> dict[str, Any]:
+        import json
+        reports = Path("out/reports")
+        passport_file = reports / "migration_passport.json"
+        if not passport_file.exists():
+            return {"has_run": False}
+        passport = json.loads(passport_file.read_text(encoding="utf-8"))
+        finops_file = reports / "finops_report.json"
+        finops = json.loads(finops_file.read_text(encoding="utf-8")) if finops_file.exists() else None
+        pred = passport.get("statement", {}).get("predicate", {})
+        return {
+            "has_run": True,
+            "run_id": pred.get("runId", "latest"),
+            "parity": pred.get("parityTestVerification", {}),
+            "finops": finops,
+            "signer": passport.get("signer_did"),
+            "services": pred.get("cutDecisionGraph", {}).get("services", []),
+        }
+
+    @app.get("/api/latest/graph")
+    async def latest_graph() -> dict[str, Any]:
+        import json
+        reports = Path("out/reports")
+        graph_file = reports / "dependency_graph.json"
+        if not graph_file.exists():
+            raise HTTPException(404, "no graph found on disk")
+        g = json.loads(graph_file.read_text(encoding="utf-8"))
+        topo_file = reports / "domain_topology.json"
+        topo = json.loads(topo_file.read_text(encoding="utf-8")) if topo_file.exists() else {}
+        cluster_of = {}
+        for name, c in topo.get("clusters", {}).items():
+            for s in c.get("symbols", []):
+                cluster_of[s] = name
+        nodes = [
+            {
+                "id": n["id"],
+                "name": n["name"],
+                "kind": n["kind"],
+                "module": n["module"],
+                "cluster": cluster_of.get(n["id"], "unassigned"),
+                "is_model": n.get("is_model", False),
+                "route": n.get("route", {}).get("path") if n.get("route") else None,
+            }
+            for n in g.get("nodes", [])
+            if n.get("kind") in ("class", "function")
+        ]
+        ids = {n["id"] for n in nodes}
+        edges = [e for e in g.get("edges", []) if e.get("source") in ids and e.get("target") in ids]
+        severed = {(s["source"], s["target"]) for s in topo.get("severed_edges", [])}
+        for e in edges:
+            e["severed"] = (e.get("source"), e.get("target")) in severed
+        return {"nodes": nodes, "edges": edges, "clusters": sorted(set(cluster_of.values()))}
+
+    @app.get("/api/topology")
+    async def get_topology() -> dict[str, Any]:
+        import json
+
+        reports = Path("out/reports")
+        topo_file = reports / "domain_topology.json"
+        graph_file = reports / "dependency_graph.json"
+        if not topo_file.exists():
+            raise HTTPException(404, "domain topology not generated yet")
+        topo = json.loads(topo_file.read_text(encoding="utf-8"))
+        symbols_info = []
+        if graph_file.exists():
+            g = json.loads(graph_file.read_text(encoding="utf-8"))
+            for n in g.get("nodes", []):
+                if n.get("kind") in ("class", "function"):
+                    symbols_info.append({
+                        "id": n["id"],
+                        "name": n["name"],
+                        "kind": n["kind"],
+                        "module": n["module"],
+                        "loc": n.get("loc", 0),
+                        "is_model": n.get("is_model", False),
+                    })
+        return {"topology": topo, "symbols": symbols_info}
+
+    @app.post("/api/topology/preview")
+    async def preview_topology(req: TopologyPreviewRequest) -> TopologyPreviewResponse:
+        import json
+
+        reports = Path("out/reports")
+        graph_file = reports / "dependency_graph.json"
+        if not graph_file.exists():
+            raise HTTPException(404, "dependency graph not found on disk")
+        g_data = json.loads(graph_file.read_text(encoding="utf-8"))
+        graph = DependencyGraph.model_validate(g_data)
+
+        # Baseline assignment:
+        topo_file = reports / "domain_topology.json"
+        current_assignment: dict[str, str] = {}
+        if topo_file.exists():
+            topo_data = json.loads(topo_file.read_text(encoding="utf-8"))
+            for cname, cl in topo_data.get("clusters", {}).items():
+                for s in cl.get("symbols", []):
+                    current_assignment[s] = cname
+
+        # Apply overrides from req:
+        nodes = graph.node_map()
+        for sid, node in nodes.items():
+            if sid in req.assignments:
+                current_assignment[sid] = req.assignments[sid]
+            elif node.name in req.assignments:
+                current_assignment[sid] = req.assignments[node.name]
+            elif node.module in req.assignments:
+                current_assignment[sid] = req.assignments[node.module]
+
+        new_topo = build_domain_topology(graph, current_assignment, human_override=True)
+        clusters_map = {name: c.symbols for name, c in new_topo.clusters.items()}
+        reduction = (
+            round((1.0 - (new_topo.severed_coupling / new_topo.initial_coupling)) * 100.0, 1)
+            if new_topo.initial_coupling > 0
+            else 0.0
+        )
+        return TopologyPreviewResponse(
+            clusters=clusters_map,
+            initial_coupling=new_topo.initial_coupling,
+            severed_coupling=new_topo.severed_coupling,
+            coupling_reduction_pct=reduction,
+            severed_edges_count=len(new_topo.severed_edges),
+            risk_level=new_topo.risk_level,
+            cycles_count=len(new_topo.cycles),
+            cycles=new_topo.cycles,
+        )
+
+    @app.post("/api/topology/save")
+    async def save_topology_override(req: TopologyPreviewRequest) -> dict[str, Any]:
+        import json
+
+        out_dir = Path("out")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        override_file = out_dir / "custom_topology.json"
+        override_file.write_text(json.dumps(req.assignments, indent=2), encoding="utf-8")
+        return {"status": "saved", "path": str(override_file), "rules_count": len(req.assignments)}
+
     return app
+
+
+app = create_app()
