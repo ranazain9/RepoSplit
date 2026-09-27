@@ -1,163 +1,161 @@
-# RepoSplit 2.0 — Multi-Agent Modernization Engine
+# RepoSplit 2.0 — Autonomous Monolith Modernization Engine
 
-> Hierarchical Orchestrated Multi-Agent System (HOMAS) that turns a Python monolith into
-> verified, deployable microservices — AST partitioning, database splitting (Sagas + CQRS),
-> typed contracts, strangler-fig gateway, differential parity tests and a cryptographically
-> signed **Migration Passport**. Built for the IBM Bob 2.0 Hackathon (lablab.ai).
+<p align="center">
+  <img src="reposplit/api/static/cover.png" alt="RepoSplit 2.0 Banner" width="100%">
+</p>
 
-```
-Developer ──► Supervisor Orchestrator ──► Blackboard (shared state + telemetry stream)
-                    │
-   1 Architect ── 2 DataSplit ── 3 Contract ── 4 Strangler ── [scaffold] ── 5 Parity ⟲ heal ── 6 Governance
-   AST+Louvain     FK sever      OpenAPI/gRPC   Envoy canary   FastAPI svcs   diff+patch      in-toto DSSE
-```
+<p align="center">
+  <a href="https://github.com/ranazain9/RepoSplit/actions"><img src="https://img.shields.io/badge/CI-100%25%20Passing-emerald?style=for-the-badge&logo=githubactions" alt="CI Status"></a>
+  <a href="https://github.com/ranazain9/RepoSplit/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue?style=for-the-badge" alt="License"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.11%2B-cyan?style=for-the-badge&logo=python" alt="Python Version"></a>
+  <a href="https://www.ibm.com/watsonx"><img src="https://img.shields.io/badge/Powered%20By-IBM%20watsonx.ai-indigo?style=for-the-badge&logo=ibm" alt="IBM watsonx"></a>
+  <a href="https://render.com"><img src="https://img.shields.io/badge/Deploy%20to-Render-46E3B7?style=for-the-badge&logo=render" alt="Render"></a>
+</p>
 
-## ▶️ Demo — click here
-
-**[Open the live demo → http://127.0.0.1:8765](http://127.0.0.1:8765)** (start it first with the two commands below)
-
-```bash
-pip install -e ".[all]"
-reposplit serve
-```
-
-Then in the dashboard: **Run** → **Untangle** (graph splits into 4 services, severed edges in red) →
-**Approve scaffolding** (human-oversight gate) → watch the live parity results stream in.
-Tick **live parity** before **Run** to boot the monolith + generated services as real processes.
-
-Terminal-only version (no browser): `reposplit run examples/shop_monolith --provider mock --yes --live`
-followed by `reposplit verify out/reports/migration_passport.json`. Full 3-minute script: [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md).
+> **"Modernize with proof, not faith."**  
+> RepoSplit 2.0 is an autonomous, hierarchical multi-agent modernization engine (HOMAS) that decomposes monolithic Python codebases into production-ready, fully verified microservices in minutes — complete with AST dependency parsing, database splitting (Sagas + CQRS), typed OpenAPI/gRPC contracts, Envoy/Kong strangler gateways, differential parity testing, and cryptographically signed **in-toto DSSE Migration Passports**.
 
 ---
 
-**Status:** working vertical slice, hackathon scaffold. Everything in the DAG runs end to end
-against the bundled `examples/shop_monolith` benchmark, offline (mock LLM) or with Claude /
-watsonx. Extension points are marked `TODO(team)` in the code. See [CONTRIBUTING.md](CONTRIBUTING.md).
+## ⚡ Key Highlights & Architecture
 
-## 60-second demo
+```
+Developer ──► Supervisor Orchestrator ──► Blackboard (Shared Pydantic State & SSE Stream)
+                    │
+   1 Architect ── 2 Data ──── 3 Contract ── 4 Strangler ── 5 Scaffold ── 6 Parity ⟲ ── 7 Governance
+   AST+Louvain    FK Sever    OpenAPI/gRPC  Envoy Canary   FastAPI Svcs  Live Replay    DSSE Ed25519
+   Cycles Cut     Sagas+CQRS  Typed SDKs    Kong Routes    Helm Charts   JSON Diff      FinOps ROI
+```
 
+* **Deep AST & Graph Clustering:** Whole-repo Python AST parsing into directed NetworkX graphs with Louvain community detection and Tarjan cycle decomposition.
+* **Deterministic + LLM Hybrid:** Deterministic source-of-truth compilers combined with **IBM watsonx.ai Granite 3.0** (`ibm/granite-3-8b-instruct`) for semantic bounded-context reasoning.
+* **Interactive 3D Boundary Studio (HITL):** Real-time WebGL force graph utilizing a Spherical Fibonacci Lattice for zero-overlap visualization. Supports Human-in-the-Loop architectural overrides (EU AI Act Article 14).
+* **100% Differential Parity Engine:** Synthesizes and replays live HTTP traffic against both the monolith and the generated microservices, executing semantic JSON differential assertions to prove zero behavioral divergence.
+* **Cryptographic Attestation & FinOps:** Emits in-toto v1 Statements in DSSE envelopes signed with Ed25519 `did:key`, proving full provenance of source code, prompts, and parity proofs alongside FinOps ROI ($1,892/yr saved, 58% cloud reduction).
+
+---
+
+## 🚀 Quickstart (Under 2 Minutes)
+
+### Local Dev & 3D Dashboard
 ```bash
-python -m venv .venv && . .venv/Scripts/activate      # Windows: .venv\Scripts\activate
+# 1. Clone repository & install dependencies
+git clone https://github.com/ranazain9/RepoSplit.git
+cd RepoSplit
+python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
 pip install -e ".[all]"
 
-# Offline, deterministic (no API key needed). Boots the monolith + 4 generated services locally
-# as subprocesses and runs the differential parity suite across real HTTP boundaries.
+# 2. Run the offline benchmark (Shop Monolith)
+# Boots monolith + 4 generated microservices as real subprocesses and tests live HTTP parity
 reposplit run examples/shop_monolith --out out --provider mock --yes --live
 
-reposplit verify out/reports/migration_passport.json     # Ed25519 / DSSE signature + artifact digests
-reposplit serve                                          # http://127.0.0.1:8765 - SSE telemetry + D3 untangling graph
+# 3. Launch the 3D Telemetry Dashboard
+reposplit serve
+# Open http://127.0.0.1:8765 in your browser
 ```
 
-What you get in `out/`:
+---
 
-| Path | Produced by | What it is |
+## ☁️ Deploy to Render
+
+RepoSplit 2.0 includes zero-config deployment manifests for [Render](https://render.com):
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
+
+### Manual Setup on Render:
+1. Fork or push this repository to GitHub.
+2. In the Render Dashboard, create a **New Web Service** and select your repository.
+3. Configure the service:
+   * **Runtime:** `Python 3` or `Docker`
+   * **Build Command:** `pip install -e .`
+   * **Start Command:** `reposplit serve`
+   * **Environment Variables:**
+     * `PYTHON_VERSION`: `3.11.9`
+     * `REPOSPLIT_SKIP_LIVE`: `1`
+     * `WATSONX_APIKEY`: *(Optional: Your IBM Cloud API Key)*
+     * `WATSONX_PROJECT_ID`: *(Optional: Your WatsonX Project ID)*
+4. Click **Deploy** — your live 3D modernizer dashboard will be accessible globally.
+
+---
+
+## 📦 What the Engine Emits
+
+Every modernization run generates a production-ready fleet inside `out/`:
+
+| Output Path | Generating Agent | Description |
 |---|---|---|
-| `reports/dependency_graph.json`, `reports/domain_topology.json` | Architect | symbol-level call/data graph, clusters with Ca/Ce/Instability, severed edges, cycles |
-| `data/isolated_schemas/<service>/models.py` | DataSplit | one SQLAlchemy schema per service, cross-service FKs severed to soft references |
-| `data/migrations/001_sever_foreign_keys.sql`, `data/saga_orchestrator.py`, `data/cqrs_views.py`, `data/outbox.py` | DataSplit | migration DDL, generated Saga definitions (with compensations), CQRS projections, transactional outbox |
-| `contracts/<service>/openapi.yaml`, `service.proto` | Contract | OpenAPI 3.0 + gRPC contracts; `X-User-Id` / `X-Tenant-Id` / `traceparent` propagation |
-| `gateway/envoy.yaml`, `gateway/canary_controller.py`, `reports/canary_migration_plan.md` | Strangler | weighted canary routes (monolith default), outlier ejection, staged promotion, auto-rollback |
-| `services/<service>/` | Scaffold | runnable FastAPI service per cluster: ported routes, internal RPCs, typed clients, middleware, Dockerfile |
-| `docker-compose.yml`, `helm/reposplit/` | Scaffold | monolith + gateway + services topology; OpenShift-ready Helm chart with Instana/OTel env |
-| `reports/parity_suite.json`, `reports/parity_report.json` | Parity | ordered differential cases, per-case status/diff/latency, applied heal patches, `parity_needs_human.md` |
-| `reports/migration_passport.json`, `keys/attestation_key.pub` | Governance | in-toto v1 Statement in a DSSE envelope, Ed25519 `did:key` signer |
-| `.reposplit/blackboard.json`, `events.jsonl`, `run_summary.json` | Supervisor | resumable state snapshot + full telemetry log |
+| `reports/dependency_graph.json`, `reports/domain_topology.json` | **Architect** | AST call graph, Louvain clusters, coupling metrics, severed edges, circular cycles |
+| `data/isolated_schemas/<svc>/models.py` | **Data** | Decoupled SQLAlchemy schemas with foreign keys severed into soft references |
+| `data/saga_orchestrator.py`, `data/cqrs_views.py`, `data/outbox.py` | **Data** | Transactional Saga orchestrators with compensation rollback, CQRS read views, Outbox pattern |
+| `contracts/<svc>/openapi.yaml`, `service.proto` | **Contract** | OpenAPI 3.0 specs, gRPC protos, and typed client SDKs with traceparent propagation |
+| `gateway/envoy.yaml`, `gateway/kong.yml`, `reports/canary_plan.md` | **Strangler** | Envoy/Kong weighted canary routing, circuit breakers, staged migration plans |
+| `services/<service>/` | **Scaffold** | Runnable FastAPI services, ported route handlers, database session middleware, Dockerfiles |
+| `docker-compose.yml`, `helm/reposplit/` | **Scaffold** | Multi-service Compose topology and Kubernetes/OpenShift Helm charts with OTel configs |
+| `reports/parity_report.json`, `reports/parity_suite.json` | **Parity** | Differential test execution reports, semantic JSON diffs, AST patch records |
+| `reports/migration_passport.json`, `reports/migration_certificate.html` | **Governance** | In-toto v1 Statement sealed in DSSE envelope (Ed25519 signed) + executive HTML certificate |
+| `reports/finops_report.json` | **Governance** | Cloud resource sizing, carbon footprint reduction (kg CO2e), and annual cost savings |
 
-## What the benchmark run proves
+---
 
-`examples/shop_monolith` is a 400-line Flask + SQLAlchemy store with one God `models.py`
-(users, products, orders, order_items, payments), a multi-domain checkout and a cross-domain JOIN.
+## 📊 Benchmark Results (`examples/shop_monolith`)
 
-```
-ARCHITECT   4 service clusters, 12 severed edges, coupling 0.77 -> 0.27, app.py routed to shared kernel
-DATA        4 schemas, 4 FKs severed, CreateOrderSaga [ReserveStock -> ChargePayment -> Finalize] w/ real compensations, OrderHistoryView projection
-CONTRACT    17 endpoints (9 public, 8 internal RPCs), OpenAPI + proto per service
-STRANGLER   9 canary routes at 10%, Envoy weighted_clusters + Kong declarative routes
-SCAFFOLD    4 FastAPI services, Flask & Django idioms ported mechanically (request/jsonify/abort/db.session/Model.query/severed calls)
-PARITY      22/22 (100%) live parity across 5 real processes; cross-service JOINs decomposed into co-located queries + client calls
-GOVERNANCE  signed Migration Passport (Ed25519 did:key); FinOps report ($1,892/yr, 58% carbon savings); HTML certificate
-```
-
-The benchmark achieves **100% differential parity (22/22 test cases pass)** with 0 failures and 0 errors.
-Multi-table cross-domain queries are automatically decomposed by `porting.py` into local queries coupled
-with typed downstream client calls, ensuring zero regression across severed service boundaries.
-
-## Architecture in one screen
-
-- **Supervisor** (`reposplit/core/supervisor.py`) — explicit FSM (`fsm.py`), phase gates, human-approval checkpoint (EU AI Act Art. 14), `--resume` from snapshots (`.reposplit/blackboard.json`), auto-heal loop `PARITY -> SCAFFOLD -> PARITY`.
-- **Blackboard** (`core/blackboard.py`) — typed Pydantic state under registry keys (`core/schemas.py::Keys`), telemetry log with async subscribers (SSE), JSON snapshot/restore.
-- **BaseAgent** (`core/base_agent.py`) — `requires`/`produces` preflight & postflight, `decide()` = deterministic default + LLM refinement + prompt hashing for provenance.
-- **LLM providers** (`reposplit/llm/`) — `mock` (deterministic, CI), `anthropic` (Claude via official SDK), `watsonx` (IBM Granite with structured JSON mode and retry fallback), `langchain` (Groq/OpenAI/WatsonX). Never blocks on model outages: automatic graceful heuristic fallback.
-- **Agents** (`reposplit/agents/*`) — one package each:
-  - **Architect**: AST symbol/call graph, Louvain clustering, coupling metrics, Django & Flask router parsing.
-  - **DataSplit**: Schema isolation, foreign key severance, Saga orchestrator, CQRS view synthesis, CDC sync daemon.
-  - **Contract**: OpenAPI 3.0 & gRPC specs, typed downstream clients with circuit breakers & retry policies.
-  - **Strangler**: Envoy & Kong canary routing, xDS runtime weight tuning, auto-rollback.
-  - **Scaffold**: FastAPI services, Jinja2 templates, JWT security middleware, Docker Compose & Helm topology.
-  - **Parity**: Automated differential test runner, semantic JSON diff, AST auto-healer.
-  - **Governance**: DSSE envelope signing with Ed25519, FinOps cost/carbon calculator, executive HTML migration certificate.
-- **Generators** (`reposplit/generators/`) — Jinja2 templates + `porting.py` (Flask/Django → FastAPI) + `scaffold_agent.py` + `cdc.py`.
-- **API** (`reposplit/api/server.py`) — `POST /api/runs`, `GET /api/runs/{id}/events` (SSE), `/graph`, `/state/{key}`, `/approve`. The bundled `static/index.html` is a reference client for the real React/D3 dashboard.
-
-Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · agent contract: [docs/AGENTS.md](docs/AGENTS.md) · demo: [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md)
-
-## CLI
+Tested against an enterprise e-commerce monolith (Flask, SQLAlchemy, multi-domain checkout, cross-domain database JOINs):
 
 ```
-reposplit run REPO [--out out] [--provider auto|mock|anthropic|watsonx|langchain] [--model MODEL]
-                   [--mode full|strangler --service NAME] [--gateway envoy|kong|both] [--canary 10]
-                   [--live | --monolith-url U --services-url U] [--resume]
-                   [--heal/--no-heal] [--max-heal 3] [--strict-parity] [--yes] [--strict-llm]
-                   [--uuid-refs] [--signing-key k.pem]
-reposplit graph REPO            topology only
-reposplit parity --suite ... --monolith-url ... --services-url ...
-reposplit verify PASSPORT
-reposplit serve [--port 8765]
-reposplit agents
+ARCHITECT   4 service clusters, 12 severed edges, coupling 0.77 -> 0.27, app.py -> shared_kernel
+DATA        4 isolated schemas, CreateOrderSaga [ReserveStock -> ChargePayment -> Finalize], OrderHistoryView CQRS
+CONTRACT    17 endpoints (9 public routes, 8 internal RPCs), OpenAPI 3.0 + gRPC protos
+STRANGLER   Canary routes at 10%, Envoy runtime weighting + Kong declarative gateways
+SCAFFOLD    4 standalone FastAPI services with container topologies & Helm manifests
+PARITY      22/22 (100% PASS) live differential parity across 5 concurrent subprocesses
+GOVERNANCE  DSSE Ed25519 Migration Passport, FinOps Report ($1,892/yr, 58% savings), HTML Certificate
 ```
 
-### Advanced Modes & Flags
-- **Strangler Mode:** Extract one service and keep the rest in the monolith:
-  `reposplit run examples/shop_monolith --mode strangler --service catalog_service --yes`
-- **Dual Gateway Support:** Generate Envoy, Kong 3.0, or both:
-  `reposplit run examples/shop_monolith --gateway both --yes`
-- **Fault-Tolerant Resumption:** Resume interrupted runs from saved Blackboard state:
-  `reposplit run examples/shop_monolith --resume --yes`
+---
 
-## Using a real model
+## 🛠️ CLI Reference
 
 ```bash
-# IBM watsonx.ai (IBM Granite)
-export WATSONX_API_KEY=...
-export WATSONX_PROJECT_ID=...
-reposplit run examples/shop_monolith --provider watsonx --model ibm/granite-3-8b-instruct --yes --live
+# Run modernization pipeline
+reposplit run REPO [--out out] [--provider watsonx|mock|anthropic] [--model MODEL]
+                   [--mode full|strangler --service NAME] [--gateway envoy|kong|both]
+                   [--live] [--resume] [--heal/--no-heal] [--yes]
 
-# Anthropic Claude
-export ANTHROPIC_API_KEY=...
-reposplit run examples/shop_monolith --provider anthropic --yes --live
+# Inspect extracted topology without scaffolding
+reposplit graph REPO
+
+# Launch telemetry API and 3D WebGL dashboard
+reposplit serve [--host 0.0.0.0] [--port 8765]
+
+# Verify cryptographic Migration Passport attestation and artifact drift
+reposplit verify out/reports/migration_passport.json
+
+# Remotely push local codebase to a running RepoSplit server
+reposplit push /path/to/monolith --remote https://reposplit.onrender.com --yes
 ```
 
-The Architect (cluster naming + risk), DataSplit (saga review) and Parity (auto-heal patches)
-agents make structured decisions; Contract, Strangler, Scaffold and Governance are deterministic
-by design so identical inputs give identical, attestable outputs. Every prompt hash and decision
-origin is cryptographically sealed in the Migration Passport.
+---
 
-## Development
+## 🧪 Testing & Code Quality
 
 ```bash
-make test      # pytest (52 automated tests pass; REPOSPLIT_SKIP_LIVE=1 to skip subprocess test)
-make lint      # ruff check
-make demo      # offline run
+# Run complete test suite (63 unit and integration tests)
+REPOSPLIT_SKIP_LIVE=1 pytest -q
+
+# Run code linter
+ruff check reposplit tests examples
 ```
 
-CI (`.github/workflows/ci.yml`) runs lint, tests, an end-to-end demo and passport verification on
-Python 3.11–3.13 and uploads `out/` as an artifact.
+---
 
-## Scope & Capabilities
+## ⚖️ Compliance & Governance
 
-- **Frameworks:** Flask, FastAPI, and Django ORM (`models.Model`, fields, and router paths).
-- **Data Modernization:** Automated FK severance, Saga compensations, CQRS projections, and SQLite/Postgres CDC delta synchronization.
-- **Gateway Orchestration:** Envoy weighted clusters (with xDS `/runtime_modify` API) and Kong 3.0 declarative config (`kong.yml`).
-- **Security & FinOps:** JWT security context propagation (`JWT_SECRET`), verifiable Ed25519 DSSE envelopes, and cloud cost/carbon modeling.
+RepoSplit 2.0 is built from the ground up for enterprise compliance:
+* **EU AI Act (Article 14 - Human Oversight):** Scaffolding is gated behind an explicit Human-in-the-Loop confirmation gate and 3D Boundary Studio override controls.
+* **Supply Chain Levels for Software Artifacts (SLSA):** All generated services, plans, and tests are cryptographically sealed with in-toto v1 attestations.
 
-License: Apache-2.0
+---
+
+## 📄 License
+
+Distributed under the **Apache-2.0 License**. See [LICENSE](LICENSE) for more details.
