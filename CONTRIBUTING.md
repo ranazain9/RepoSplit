@@ -63,15 +63,15 @@ Rules that keep the engine trustworthy:
 
 | Task | Where | Notes |
 |---|---|---|
-| Wire `order_history` to the CQRS projection so parity hits 100% | `generators/porting.py` (or an LLM heal patch) | the exact failing case the demo can "heal" live |
-| Real LLM auto-heal loop with Claude | `agents/parity/healer.py`, `prompts.py` | `HealDecision` is already validated + applied; needs prompt tuning |
-| React + D3/Cytoscape dashboard | new `dashboard/` | consume `/api/runs/{id}/events` (SSE) and `/graph`; `api/static/index.html` shows the shapes |
-| FinOps card (monolith $ vs autoscaled pods $) | new agent or Governance predicate | pure arithmetic from cluster LOC/route counts; judges love it |
+| Wire `order_history` to the CQRS projection / client decomposition | `generators/porting.py`, `agents/parity/healer.py` | Completed: generic cross-service join rewriter & auto-heal achieves 100% parity |
+| Real LLM auto-heal loop with Claude / WatsonX | `agents/parity/healer.py`, `prompts.py` | `HealDecision` is validated, applied, and tested |
+| React + D3/Cytoscape dashboard | new `dashboard/` | `/api/runs/{id}/events` (SSE) and `/graph` streaming with human-in-the-loop customizer |
+| FinOps card (monolith $ vs autoscaled pods $) | `utils/finops.py`, Governance predicate | Completed: AWS/GCP benchmarks + carbon reduction ($1,892/yr, 58%) |
 | Django ORM + Django URL patterns in the parser | `agents/architect/ast_parser.py`, `agents/data/schema_parser.py` | `MODEL_BASES`, `_route_from_decorators` are the hooks |
-| Kong declarative config alongside Envoy | `agents/strangler/agent.py` | `GatewayPlan.gateway = "kong"` |
-| xDS-driven canary weights instead of editing YAML | `generators/templates/canary_controller.py.j2` | |
-| watsonx provider verification | `llm/watsonx_provider.py` | check endpoint version + response shape |
-| Resume a failed run from the blackboard snapshot | `core/supervisor.py` | `Blackboard.load()` already exists |
+| Kong declarative config alongside Envoy | `agents/strangler/agent.py` | Completed: dual gateway support (`--gateway envoy|kong|both`) |
+| xDS-driven canary weights instead of editing YAML | `generators/templates/canary_controller.py.j2` | Completed in strangler agent |
+| watsonx provider verification | `llm/watsonx_provider.py` | Completed: verified with dedicated unit test suite (`tests/test_watsonx_provider.py`) |
+| Resume a failed run from the blackboard snapshot | `core/supervisor.py` | Completed: `--resume` loads from `.reposplit/blackboard.json` |
 
 ## Tests
 

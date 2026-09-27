@@ -5,6 +5,7 @@
     reposplit graph examples/shop_monolith               # topology only, no artifacts
     reposplit parity --suite out/reports/parity_suite.json --monolith-url ... --services-url ...
     reposplit verify out/reports/migration_passport.json
+    reposplit push examples/shop_monolith --remote http://localhost:8765
     reposplit serve                                      # dashboard + SSE telemetry API
     reposplit agents
 """
@@ -261,5 +262,128 @@ def agents() -> None:
     console.print(table)
 
 
+@app.command()
+def push(
+    path: Path = typer.Argument(..., exists=True, file_okay=False, help="path to local monolith directory to push"),
+    remote: str = typer.Option(..., "--remote", "-r", help="base URL of the remote RepoSplit server (e.g. http://127.0.0.1:8765)"),
+    provider: str = typer.Option("auto", help="auto | mock | anthropic | watsonx | groq"),
+    live: bool = typer.Option(False, "--live", help="boot monolith + generated services remotely and run live parity"),
+    heal: bool = typer.Option(True, "--heal/--no-heal", help="auto-healing loop on parity regressions"),
+    yes: bool = typer.Option(True, "--yes", "-y", help="skip human approval gate"),
+    out: Path = typer.Option(Path("out"), "--out", "-o", help="local directory to unpack the modernization fleet artifacts into"),
+) -> None:
+    """Zip a local repository, upload to a remote RepoSplit instance, stream live progress, and pull down the generated microservices."""
+    import io
+    import zipfile
+
+    import httpx
+
+    remote_url = remote.rstrip("/")
+    console.print(f"[bold cyan]RepoSplit Remote Push[/] -> {remote_url}")
+
+    # 1. Zip local path
+    console.print(f"Compressing [cyan]{path}[/]...")
+    buf = io.BytesIO()
+    ignored_patterns = {".git", "__pycache__", ".venv", ".pytest_cache", ".ruff_cache", "out", ".reposplit"}
+    file_count = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for file in path.rglob("*"):
+            if file.is_file():
+                rel = file.relative_to(path)
+                if any(part in ignored_patterns or part.endswith(".pyc") for part in rel.parts):
+                    continue
+                zf.write(file, rel)
+                file_count += 1
+    buf.seek(0)
+    console.print(f"Packed {file_count} files ({len(buf.getvalue()) / 1024:.1f} KB).")
+
+    with httpx.Client(timeout=120.0) as client:
+        # 2. Upload
+        console.print("Uploading source to remote...")
+        try:
+            files = {"file": (f"{path.name}.zip", buf.getvalue(), "application/zip")}
+            resp = client.post(f"{remote_url}/api/upload", files=files)
+            resp.raise_for_status()
+            upload_data = resp.json()
+            remote_repo_path = upload_data["repo_path"]
+        except Exception as e:
+            console.print(f"[red]Upload failed:[/] {e}")
+            raise typer.Exit(code=1) from e
+
+        # 3. Start Run
+        console.print(f"Starting remote run for [cyan]{remote_repo_path}[/]...")
+        try:
+            start_payload = {
+                "repo_path": remote_repo_path,
+                "provider": provider,
+                "live": live,
+                "auto_heal": heal,
+                "require_approval": not yes,
+            }
+            resp = client.post(f"{remote_url}/api/runs", json=start_payload)
+            resp.raise_for_status()
+            run_data = resp.json()
+            run_id = run_data["run_id"]
+            console.print(f"[bold green]Remote run started:[/] run_id={run_id}")
+        except Exception as e:
+            console.print(f"[red]Failed to start remote run:[/] {e}")
+            raise typer.Exit(code=1) from e
+
+        # 4. Stream SSE Events
+        console.print("Streaming remote telemetry events...")
+        run_failed = False
+        try:
+            with client.stream("GET", f"{remote_url}/api/runs/{run_id}/events", timeout=None) as stream_resp:
+                for line in stream_resp.iter_lines():
+                    if line.startswith("event: end"):
+                        break
+                    if line.startswith("data: "):
+                        data_str = line[len("data: "):].strip()
+                        if not data_str or data_str == "{}":
+                            continue
+                        try:
+                            ev = json.loads(data_str)
+                            phase = ev.get("phase", "")
+                            agent = ev.get("agent", "")
+                            msg = ev.get("message", "")
+                            lvl = ev.get("level", "info")
+                            color = "green" if lvl == "info" else ("yellow" if lvl == "warn" else "red")
+                            console.print(f"[{color}][{phase}][/] [bold]{agent}[/]: {msg}")
+                            if phase == "failed":
+                                run_failed = True
+                        except Exception:
+                            pass
+        except Exception as e:
+            console.print(f"[yellow]Stream ended or disconnected:[/] {e}")
+
+        # Check run status if not explicitly failed yet
+        try:
+            status_resp = client.get(f"{remote_url}/api/runs/{run_id}")
+            if status_resp.is_success:
+                st = status_resp.json()
+                if st.get("phase") == "failed":
+                    run_failed = True
+        except Exception:
+            pass
+
+        if run_failed:
+            console.print("[bold red]Modernization run failed remotely.[/]")
+            raise typer.Exit(code=1)
+
+        # 5. Download Fleet Artifacts
+        console.print(f"Downloading modernized microservice fleet into [cyan]{out}[/]...")
+        out.mkdir(parents=True, exist_ok=True)
+        try:
+            dl_resp = client.get(f"{remote_url}/api/runs/{run_id}/download")
+            dl_resp.raise_for_status()
+            with zipfile.ZipFile(io.BytesIO(dl_resp.content)) as zf:
+                zf.extractall(out)
+            console.print(f"[bold green]Successfully modernized repository![/] Output extracted to [cyan]{out}[/]")
+        except Exception as e:
+            console.print(f"[red]Failed to download generated artifacts:[/] {e}")
+            raise typer.Exit(code=1) from e
+
+
 if __name__ == "__main__":
     app()
+

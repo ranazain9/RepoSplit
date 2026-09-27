@@ -179,6 +179,7 @@ class GraphEdge(BaseModel):
     target: str
     kind: Literal["import", "call", "data_access", "inherits", "fk", "transaction"]
     weight: int = 1
+    in_loop: bool = False
 
 
 class DependencyGraph(BaseModel):
@@ -218,6 +219,8 @@ class SeveredEdge(BaseModel):
     kind: str
     weight: int
     risk: RiskLevel
+    in_loop: bool = False
+    chatty_warning: str | None = None
 
 
 class DependencyCycle(BaseModel):

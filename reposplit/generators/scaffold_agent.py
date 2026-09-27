@@ -86,6 +86,9 @@ class ScaffoldAgent(BaseAgent):
                     ),
                     healed=self._healed_files(previous, svc),
                 ),
+                self._write(f"{base}/app/config.py", render("service/config.py.j2", service=svc, port=contract.port)),
+                self._write(f"{base}/app/routers/__init__.py", ""),
+                self._write(f"{base}/app/routers/health.py", render("service/health.py.j2", service=svc)),
                 self._write(f"{base}/app/db.py", render("service/db.py.j2", service=svc)),
                 self._write(
                     f"{base}/app/middleware.py",

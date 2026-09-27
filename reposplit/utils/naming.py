@@ -38,7 +38,13 @@ def score_domains(words: list[str]) -> dict[str, int]:
     for w in words:
         for domain, keys in DOMAIN_LEXICON.items():
             for k in keys:
-                if w == k or w.startswith(k) or (len(k) > 4 and k in w):
+                if (
+                    w == k
+                    or w in (f"{k}s", f"{k}es", f"{k}ing", f"{k}ed")
+                    or f"_{k}_" in f"_{w}_"
+                    or w.startswith(f"{k}_")
+                    or w.endswith(f"_{k}")
+                ):
                     scores[domain] += 1
     return scores
 

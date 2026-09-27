@@ -175,7 +175,9 @@ class ArchitectAgent(BaseAgent):
                 ClusterAssignment(heuristic_name=n, proposed_name=n, rationale=c.rationale or "heuristic domain lexicon")
                 for n, c in topology.clusters.items()
             ],
-            high_risk_cut_points=[f"{s.source} -> {s.target}" for s in topology.severed_edges if s.risk == RiskLevel.HIGH],
+            high_risk_cut_points=[
+                f"{s.source} -> {s.target}" for s in topology.severed_edges if s.risk in (RiskLevel.HIGH, RiskLevel.CRITICAL)
+            ],
             risk_level=topology.risk_level,
             rationale=topology.rationale,
         )

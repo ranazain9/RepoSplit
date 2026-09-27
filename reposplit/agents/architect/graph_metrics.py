@@ -246,7 +246,9 @@ def partition_symbols(
 HIGH_RISK_CALL_WEIGHT = 5
 
 
-def edge_risk(kind: str, weight: int) -> RiskLevel:
+def edge_risk(kind: str, weight: int, in_loop: bool = False) -> RiskLevel:
+    if in_loop:
+        return RiskLevel.CRITICAL
     if kind == "transaction":
         return RiskLevel.CRITICAL
     if kind in ("fk", "inherits", "data_access"):
@@ -259,11 +261,12 @@ def edge_risk(kind: str, weight: int) -> RiskLevel:
 
 
 def overall_risk(severed: list[SeveredEdge], cycles: list[DependencyCycle]) -> RiskLevel:
+    criticals = sum(1 for s in severed if s.risk == RiskLevel.CRITICAL)
     highs = sum(1 for s in severed if s.risk == RiskLevel.HIGH)
     service_cycle = any(all(not m.endswith(".py") for m in c.members) for c in cycles)
-    if highs > 10:
+    if criticals > 5 or highs > 10:
         return RiskLevel.CRITICAL
-    if service_cycle or highs > 5:
+    if criticals > 0 or service_cycle or highs > 5:
         return RiskLevel.HIGH
     if highs > 0 or len(severed) > 5:
         return RiskLevel.MEDIUM
@@ -321,6 +324,12 @@ def build_domain_topology(
         cu, cv = assignment.get(e.source), assignment.get(e.target)
         if not cu or not cv or cu == cv or cu not in service_names or cv not in service_names:
             continue
+        warning = None
+        if e.in_loop:
+            warning = (
+                "Chatty boundary: target is invoked inside a loop across service boundaries (N+1 remote calls). "
+                "Recommend bulk API batching or co-locating."
+            )
         severed.append(
             SeveredEdge(
                 source=e.source,
@@ -329,7 +338,9 @@ def build_domain_topology(
                 target_cluster=cv,
                 kind=e.kind,
                 weight=e.weight,
-                risk=edge_risk(e.kind, e.weight),
+                risk=edge_risk(e.kind, e.weight, in_loop=e.in_loop),
+                in_loop=e.in_loop,
+                chatty_warning=warning,
             )
         )
     severed.sort(key=lambda s: (-s.weight, s.source))

@@ -67,3 +67,28 @@ def atomic_checkout():
     assert len(tx_edges) >= 1
     assert any("atomic_checkout" in e.source and "helper_operation" in e.target for e in tx_edges)
     assert edge_risk("transaction", 1) == RiskLevel.CRITICAL
+
+
+def test_loop_call_detection_and_chatty_warning(tmp_path: Path) -> None:
+    code = """
+def remote_api():
+    return {"status": "ok"}
+
+def process_items(items):
+    results = []
+    for item in items:
+        res = remote_api()
+        results.append(res)
+    return results
+"""
+    f = tmp_path / "orders.py"
+    f.write_text(code, encoding="utf-8")
+
+    parser = PythonRepoParser(tmp_path)
+    graph = parser.parse()
+
+    call_edges = [e for e in graph.edges if e.kind == "call" and "process_items" in e.source and "remote_api" in e.target]
+    assert len(call_edges) == 1
+    assert call_edges[0].in_loop is True
+    assert edge_risk("call", 1, in_loop=True) == RiskLevel.CRITICAL
+

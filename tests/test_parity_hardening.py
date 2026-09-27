@@ -8,12 +8,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
+from reposplit.agents.parity.healer import _decompose_generic_join, heuristic_decision
 from reposplit.agents.parity.local_stack import free_port
 from reposplit.agents.parity.runner import DifferentialRunner, Targets
 from reposplit.agents.parity.semantic_diff import DEFAULT_MASKS, diff, normalize
-from reposplit.core.schemas import ParityCase
+from reposplit.core.schemas import ParityCase, ScaffoldedService, ScaffoldManifest
 
 
 def test_runner_send_get_query_params() -> None:
@@ -111,3 +113,47 @@ def test_local_stack_free_port_collision_safety() -> None:
     assert len(ports) == 10
     assert len(set(ports)) == 10
     assert len(allocated) == 10
+
+
+def test_decompose_generic_join(tmp_path: Path) -> None:
+    order_svc_app = tmp_path / "services" / "order_service" / "app"
+    order_svc_app.mkdir(parents=True)
+    (order_svc_app / "models.py").write_text("class Order(Base): pass\nclass OrderItem(Base): pass\n", encoding="utf-8")
+
+    catalog_svc_app = tmp_path / "services" / "catalog_service" / "app"
+    catalog_svc_app.mkdir(parents=True)
+    (catalog_svc_app / "models.py").write_text("class Product(Base): pass\n", encoding="utf-8")
+
+    code = """
+def custom_report():
+    items = (
+        session.query(Order, Product)
+        .join(Product, Product.id == Order.product_id)
+        .filter(Order.status == 'complete')
+        .all()
+    )
+    return items
+"""
+    (order_svc_app / "main.py").write_text(code, encoding="utf-8")
+
+    res = _decompose_generic_join(code, "order_service", tmp_path)
+    assert res is not None
+    old_join, new_join = res
+    assert "session.query(Order, Product)" in old_join
+    assert "_items_local = (" in new_join
+    assert "session.query(Order)" in new_join
+    assert "clients.catalog_service.get_product" in new_join
+    assert "items.append((_order, _product))" in new_join
+
+    manifest = ScaffoldManifest(
+        services={"order_service": ScaffoldedService(service="order_service", directory="services/order_service", port=8001, files=[], routes=1, rpcs=0)},
+        compose_file="",
+        helm_chart="",
+        monolith_context="",
+    )
+    case = ParityCase(id="001_custom_report", service="order_service", method="GET", path="/report", status="FAIL", diff=["status: 500 != 200"])
+    decision = heuristic_decision([case], manifest, tmp_path)
+    assert len(decision.patches) == 1
+    assert decision.patches[0].confidence == 0.95
+    assert "clients.catalog_service.get_product" in decision.patches[0].replace
+

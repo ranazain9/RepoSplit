@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Test 3D</title>
+<script src="/static/vendor/3d-force-graph.min.js"></script>
+</head>
+<body style="margin:0; background:#060913; overflow:hidden;">
+<div id="graph-test" style="width:100vw; height:100vh;"></div>
+<script>
+const elem = document.getElementById('graph-test');
+const Graph = ForceGraph3D()(elem)
+  .nodeId('id')
+  .nodeLabel('name')
+  .nodeAutoColorBy('cluster')
+  .graphData({
+    nodes: [
+      { id: "A", name: "catalog_service", cluster: "catalog" },
+      { id: "B", name: "order_service", cluster: "order" },
+      { id: "C", name: "payment_service", cluster: "payment" },
+      { id: "D", name: "user_service", cluster: "user" }
+    ],
+    links: [
+      { source: "A", target: "B" },
+      { source: "B", target: "C" },
+      { source: "C", target: "D" },
+      { source: "D", target: "A" }
+    ]
+  });
+</script>
+</body>
+</html>

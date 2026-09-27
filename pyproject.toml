@@ -30,6 +30,7 @@ dependencies = [
   "rich>=13.7",
   "cryptography>=42",
   "fastapi>=0.111",
+  "python-multipart>=0.0.9",
   "uvicorn[standard]>=0.29",
   "python-dotenv>=1.0",
 ]

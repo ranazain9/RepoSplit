@@ -29,7 +29,7 @@ def free_port(exclude: set[int] | None = None) -> int:
             if port not in exclude:
                 exclude.add(port)
                 return port
-    return port
+    raise RuntimeError(f"Could not allocate an unused port after 50 attempts (excluded: {len(exclude)} ports)")
 
 
 def _wait_healthy(url: str, timeout: float = 30.0, log_path: Path | None = None) -> None:

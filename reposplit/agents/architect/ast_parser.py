@@ -224,7 +224,16 @@ class PythonRepoParser:
         self.by_dotted: dict[str, str] = {}
         self.nodes: dict[str, GraphNode] = {}
         self.edges: dict[tuple[str, str, str], int] = defaultdict(int)
+        self.edge_in_loop: dict[tuple[str, str, str], bool] = defaultdict(bool)
         self.tables: dict[str, str] = {}  # table name -> class node id
+
+    def _record_edge(
+        self, source: str, target: str, kind: str, weight: int = 1, in_loop: bool = False
+    ) -> None:
+        key = (source, target, kind)
+        self.edges[key] += weight
+        if in_loop:
+            self.edge_in_loop[key] = True
 
     # ---- public --------------------------------------------------------------------
 
@@ -259,7 +268,13 @@ class PythonRepoParser:
             self._collect_edges(info)
 
         edges = [
-            GraphEdge(source=s, target=t, kind=k, weight=w)  # type: ignore[arg-type]
+            GraphEdge(
+                source=s,
+                target=t,
+                kind=k,  # type: ignore[arg-type]
+                weight=w,
+                in_loop=self.edge_in_loop.get((s, t, k), False),
+            )
             for (s, t, k), w in sorted(self.edges.items())
         ]
         return DependencyGraph(
@@ -410,7 +425,7 @@ class PythonRepoParser:
         for base in node.bases:
             target = self._resolve_name(ast.unparse(base).split(".")[-1], info)
             if target and target != owner:
-                self.edges[(owner, target, "inherits")] += 1
+                self._record_edge(owner, target, "inherits", weight=1)
         for sub in ast.walk(node):
             if not isinstance(sub, ast.Call):
                 continue
@@ -419,11 +434,11 @@ class PythonRepoParser:
                 table = str(sub.args[0].value).split(".")[0]
                 target = self.tables.get(table)
                 if target and target != owner:
-                    self.edges[(owner, target, "fk")] += 1
+                    self._record_edge(owner, target, "fk", weight=1)
             elif fname == "relationship" and sub.args and isinstance(sub.args[0], ast.Constant):
                 target = self._resolve_name(str(sub.args[0].value), info)
                 if target and target != owner:
-                    self.edges[(owner, target, "fk")] += 1
+                    self._record_edge(owner, target, "fk", weight=1)
 
     def _scan_body(self, owner: str, node: ast.AST, info: _ModuleInfo) -> None:
         is_fn_tx = False
@@ -432,40 +447,87 @@ class PythonRepoParser:
                 "transaction" in ast.unparse(d).lower() or "atomic" in ast.unparse(d).lower()
                 for d in node.decorator_list
             )
+        visitor = _BodyVisitor(owner=owner, info=info, parser=self, is_fn_tx=is_fn_tx)
+        visitor.visit(node)
 
-        for sub in ast.walk(node):
-            if isinstance(sub, ast.With):
-                is_tx = any(
-                    any(
-                        t in ast.unparse(item.context_expr).lower()
-                        for t in ("session.begin", "transaction.atomic", "db.session.begin", "begin_nested")
-                    )
-                    for item in sub.items
-                )
-                if is_tx:
-                    for inner in ast.walk(sub):
-                        if isinstance(inner, ast.Call):
-                            target = None
-                            if isinstance(inner.func, ast.Name):
-                                target = self._resolve_name(inner.func.id, info)
-                            elif isinstance(inner.func, ast.Attribute):
-                                target = self._resolve_attr_call(inner.func, info)
-                            if target and target != owner:
-                                self.edges[(owner, target, "transaction")] += 5
-            elif isinstance(sub, ast.Call):
-                target = None
-                if isinstance(sub.func, ast.Name):
-                    target = self._resolve_name(sub.func.id, info)
-                elif isinstance(sub.func, ast.Attribute):
-                    target = self._resolve_attr_call(sub.func, info)
-                # Model constructors (User(...)) are counted by the Name branch below.
-                if target and target != owner and not self.nodes[target].is_model:
-                    self.edges[(owner, target, "call")] += 1
-                    if is_fn_tx:
-                        self.edges[(owner, target, "transaction")] += 5
-            elif isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
-                target = self._resolve_name(sub.id, info)
-                if target and target != owner and self.nodes[target].is_model:
-                    # Model referenced as a value (User.query, session.query(User), User(...)).
-                    # Constructor calls are also caught above; count once per reference site.
-                    self.edges[(owner, target, "data_access")] += 1
+
+class _BodyVisitor(ast.NodeVisitor):
+    def __init__(self, owner: str, info: _ModuleInfo, parser: PythonRepoParser, is_fn_tx: bool) -> None:
+        self.owner = owner
+        self.info = info
+        self.parser = parser
+        self.is_fn_tx = is_fn_tx
+        self.loop_depth = 0
+        self.tx_depth = 0
+
+    def visit_For(self, node: ast.For) -> None:
+        self.loop_depth += 1
+        self.generic_visit(node)
+        self.loop_depth -= 1
+
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
+        self.loop_depth += 1
+        self.generic_visit(node)
+        self.loop_depth -= 1
+
+    def visit_While(self, node: ast.While) -> None:
+        self.loop_depth += 1
+        self.generic_visit(node)
+        self.loop_depth -= 1
+
+    def visit_ListComp(self, node: ast.ListComp) -> None:
+        self.loop_depth += 1
+        self.generic_visit(node)
+        self.loop_depth -= 1
+
+    def visit_SetComp(self, node: ast.SetComp) -> None:
+        self.loop_depth += 1
+        self.generic_visit(node)
+        self.loop_depth -= 1
+
+    def visit_DictComp(self, node: ast.DictComp) -> None:
+        self.loop_depth += 1
+        self.generic_visit(node)
+        self.loop_depth -= 1
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+        self.loop_depth += 1
+        self.generic_visit(node)
+        self.loop_depth -= 1
+
+    def visit_With(self, node: ast.With) -> None:
+        is_tx = any(
+            any(
+                t in ast.unparse(item.context_expr).lower()
+                for t in ("session.begin", "transaction.atomic", "db.session.begin", "begin_nested")
+            )
+            for item in node.items
+        )
+        if is_tx:
+            self.tx_depth += 1
+        self.generic_visit(node)
+        if is_tx:
+            self.tx_depth -= 1
+
+    def visit_Call(self, node: ast.Call) -> None:
+        target = None
+        if isinstance(node.func, ast.Name):
+            target = self.parser._resolve_name(node.func.id, self.info)
+        elif isinstance(node.func, ast.Attribute):
+            target = self.parser._resolve_attr_call(node.func, self.info)
+
+        if target and target != self.owner and not self.parser.nodes[target].is_model:
+            in_loop = self.loop_depth > 0
+            if self.is_fn_tx or self.tx_depth > 0:
+                self.parser._record_edge(self.owner, target, "transaction", weight=5, in_loop=in_loop)
+            self.parser._record_edge(self.owner, target, "call", weight=1, in_loop=in_loop)
+
+        self.generic_visit(node)
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if isinstance(node.ctx, ast.Load):
+            target = self.parser._resolve_name(node.id, self.info)
+            if target and target != self.owner and self.parser.nodes[target].is_model:
+                in_loop = self.loop_depth > 0
+                self.parser._record_edge(self.owner, target, "data_access", weight=1, in_loop=in_loop)
+        self.generic_visit(node)

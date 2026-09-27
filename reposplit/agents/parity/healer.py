@@ -12,10 +12,102 @@ import re
 from pathlib import Path
 
 from reposplit.core.schemas import HealDecision, HealPatch, ParityCase, ScaffoldManifest
+from reposplit.utils.naming import to_snake
 
 
 def _route_function(case: ParityCase) -> str:
     return case.id.split("_", 1)[1].replace("_not_found", "").replace("_after_writes", "").replace("_after_cancel", "").replace("_idempotent", "")
+
+
+def _model_owners(output_dir: Path) -> dict[str, str]:
+    owners: dict[str, str] = {}
+    services_dir = output_dir / "services"
+    if not services_dir.exists():
+        return owners
+    for svc_dir in services_dir.iterdir():
+        if not svc_dir.is_dir():
+            continue
+        models_py = svc_dir / "app" / "models.py"
+        if models_py.exists():
+            content = models_py.read_text(encoding="utf-8", errors="ignore")
+            for m in re.finditer(r"^class\s+(\w+)\s*\(", content, flags=re.MULTILINE):
+                owners[m.group(1)] = svc_dir.name
+    return owners
+
+
+def _decompose_generic_join(
+    source: str, service: str, output_dir: Path
+) -> tuple[str, str] | None:
+    multi_query_re = re.compile(
+        r"(?P<lhs>\w+)\s*=\s*\(\s*session\.query\((?P<models>[^)]+)\)"
+        r"(?P<chain>[\s\S]*?)\.all\(\)\s*\)",
+        re.MULTILINE,
+    )
+    m = multi_query_re.search(source)
+    if not m:
+        return None
+    raw_models = [s.strip() for s in m.group("models").split(",")]
+    if len(raw_models) <= 1:
+        return None
+
+    model_owners = _model_owners(output_dir)
+    foreign_in_query = [(mdl, model_owners[mdl]) for mdl in raw_models if mdl in model_owners and model_owners[mdl] != service]
+    local_models = [mdl for mdl in raw_models if model_owners.get(mdl) == service or mdl not in model_owners]
+    if not foreign_in_query or not local_models:
+        return None
+
+    lhs = m.group("lhs")
+    chain = m.group("chain")
+    foreign_names = {f for f, _ in foreign_in_query}
+
+    join_clauses = re.findall(r"\.join\([^)]+\)", chain)
+    local_joins = [jc for jc in join_clauses if not any(f in jc for f in foreign_names)]
+    filter_clauses = re.findall(r"\.filter\([^)]+\)", chain)
+    order_clauses = re.findall(r"\.order_by\([^)]+\)", chain)
+
+    local_models_str = ", ".join(local_models)
+    local_query_var = f"_{lhs}_local"
+
+    lines = [
+        f"{local_query_var} = (",
+        f"        session.query({local_models_str})",
+    ]
+    for jc in local_joins:
+        lines.append(f"        {jc}")
+    for fc in filter_clauses:
+        lines.append(f"        {fc}")
+    for oc in order_clauses:
+        lines.append(f"        {oc}")
+    lines.append("        .all()\n    )")
+
+    lines.append(f"{lhs} = []")
+    if len(local_models) == 1:
+        loop_pattern = f"_{to_snake(local_models[0])}"
+    else:
+        loop_vars = [f"_{to_snake(lm)}" for lm in local_models]
+        loop_pattern = f"{', '.join(loop_vars)}"
+
+    lines.append(f"for {loop_pattern} in {local_query_var}:")
+    var_map: dict[str, str] = {lm: f"_{to_snake(lm)}" for lm in local_models}
+
+    for fmdl, fowner in foreign_in_query:
+        f_var = f"_{to_snake(fmdl)}"
+        var_map[fmdl] = f_var
+        fk_col = f"{to_snake(fmdl)}_id"
+        op = f"get_{to_snake(fmdl)}"
+        fk_lookups = [f"getattr({var_map[lm]}, '{fk_col}', None)" for lm in local_models]
+        fk_expr = fk_lookups[0] if len(fk_lookups) == 1 else " or ".join(fk_lookups)
+        lines.append(f"    _fk_{to_snake(fmdl)} = {fk_expr}")
+        lines.append(
+            f"    {f_var} = clients.{fowner}.{op}(_fk_{to_snake(fmdl)}) if _fk_{to_snake(fmdl)} is not None else None"
+        )
+
+    tuple_items = [var_map[m_name] for m_name in raw_models]
+    lines.append(f"    {lhs}.append(({', '.join(tuple_items)}))")
+
+    old_code = m.group(0)
+    new_code = "\n    ".join(lines)
+    return old_code, new_code
 
 
 def heuristic_decision(cases: list[ParityCase], manifest: ScaffoldManifest, output_dir: Path) -> HealDecision:
@@ -94,6 +186,22 @@ def heuristic_decision(cases: list[ParityCase], manifest: ScaffoldManifest, outp
                     )
                 )
                 continue
+
+        # Generalized cross-service JOIN query decomposition:
+        generic_join = _decompose_generic_join(source, case.service, output_dir)
+        if generic_join:
+            old_join, new_join = generic_join
+            decision.patches.append(
+                HealPatch(
+                    case_id=case.id,
+                    file=f"services/{case.service}/app/main.py",
+                    find=old_join,
+                    replace=new_join,
+                    rationale=f"resolve cross-service JOIN in {fn} via client calls",
+                    confidence=0.95,
+                )
+            )
+            continue
 
         if any("foreign model" in n for n in notes):
             decision.needs_human.append(
