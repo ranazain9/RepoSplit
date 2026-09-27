@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: reposplit
+    env: python
+    plan: free
+    buildCommand: pip install -e .
+    startCommand: reposplit serve
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: REPOSPLIT_SKIP_LIVE
+        value: "1"

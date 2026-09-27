@@ -241,12 +241,19 @@ def verify(
 @app.command()
 def serve(host: str = typer.Option("127.0.0.1"), port: int = typer.Option(8765)) -> None:
     """Start the telemetry API + dashboard (SSE event stream, D3 untangling graph)."""
+    import os
+
     import uvicorn
 
     from reposplit.api.server import create_app
 
-    console.print(f"dashboard: http://{host}:{port}/")
-    uvicorn.run(create_app(), host=host, port=port, log_level="info")
+    resolved_host = os.environ.get("HOST", host)
+    if "PORT" in os.environ and host == "127.0.0.1":
+        resolved_host = "0.0.0.0"
+    resolved_port = int(os.environ.get("PORT", str(port)))
+
+    console.print(f"dashboard: http://{resolved_host}:{resolved_port}/")
+    uvicorn.run(create_app(), host=resolved_host, port=resolved_port, log_level="info")
 
 
 @app.command()

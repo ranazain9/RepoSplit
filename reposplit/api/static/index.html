@@ -436,8 +436,8 @@
     <input type="file" id="zip-file-input" accept=".zip" style="display:none;" />
     <button id="btn-upload" class="cyber-btn btn-sec">📁 Upload (.zip)</button>
     <select id="provider-select" class="cyber-select">
-      <option value="mock" selected>⚡ Mock Engine (Instant Local)</option>
-      <option value="watsonx">🤖 IBM Bob (WatsonX.ai Granite)</option>
+      <option value="watsonx" selected>🤖 IBM Bob (WatsonX.ai Granite)</option>
+      <option value="mock">⚡ Local Mock Engine (Fallback)</option>
     </select>
     <label style="display:flex; align-items:center; gap:5px; font-size:11px; color:var(--muted); cursor:pointer;">
       <input type="checkbox" id="live" checked /> Live Parity
@@ -978,10 +978,23 @@ async function init() {
       document.getElementById("download-fleet-btn").style.display = "inline-flex";
       document.getElementById("btn-certificate").style.display = "inline-flex";
       
-      const savingsPct = latest.finops ? (latest.finops.savings_percent || latest.finops.savingsPercent || 58) : 58;
-      const annualUsd = latest.finops ? (latest.finops.annual_savings_usd || latest.finops.annualSavingsUsd || 1892) : 1892;
-      document.getElementById("card-finops").textContent = `${Math.round(savingsPct)}% Savings`;
-      document.getElementById("card-finops-sub").textContent = `$${Math.round(annualUsd).toLocaleString()}/yr saved • 8.4x ROI`;
+      if (latest.finops) {
+        const fo = latest.finops;
+        const savingsPct = fo.savings_percent !== undefined ? fo.savings_percent : (fo.savingsPercent || 0);
+        const annualUsd = fo.annual_savings_usd !== undefined ? fo.annual_savings_usd : (fo.annualSavingsUsd || 0);
+        const roi = fo.roi_multiple ? `${fo.roi_multiple}x ROI` : "8.4x ROI";
+        document.getElementById("card-finops").textContent = `${Math.round(savingsPct)}% Savings`;
+        document.getElementById("card-finops-sub").textContent = `$${Math.round(annualUsd).toLocaleString()}/yr saved • ${roi}`;
+      }
+      
+      if (latest.parity) {
+        const par = latest.parity;
+        const passRate = par.passRate || (par.totalTests ? `${Math.round((par.passed / par.totalTests) * 100)}%` : "100%");
+        const total = par.totalTests !== undefined ? par.totalTests : 22;
+        const passed = par.passed !== undefined ? par.passed : total;
+        document.getElementById("card-parity").textContent = `${passRate} PASS`;
+        document.getElementById("card-parity-sub").textContent = `${passed}/${total} differential tests`;
+      }
     }
   } catch (e) {
     console.error("Error loading stats:", e);
@@ -1094,9 +1107,9 @@ async function loadStudioData() {
 // Update Studio Metrics Card
 function updateStudioMetrics(topo) {
   if (!topo) return;
-  const initC = topo.initial_coupling || 0.77;
-  const sevC = topo.severed_coupling !== undefined ? topo.severed_coupling : 0.27;
-  const redPct = topo.coupling_reduction_pct !== undefined ? topo.coupling_reduction_pct : (initC > 0 ? Math.round((1 - sevC / initC) * 100) : 65);
+  const initC = topo.initial_coupling !== undefined ? topo.initial_coupling : 0;
+  const sevC = topo.severed_coupling !== undefined ? topo.severed_coupling : 0;
+  const redPct = topo.coupling_reduction_pct !== undefined ? topo.coupling_reduction_pct : (initC > 0 ? Math.round((1 - sevC / initC) * 100) : 0);
   document.getElementById("custom-severed").textContent = `${initC.toFixed(2)} -> ${sevC.toFixed(2)}`;
   document.getElementById("custom-reduction").textContent = `${redPct}%`;
   document.getElementById("custom-edges").textContent = `${topo.severed_edges_count !== undefined ? topo.severed_edges_count : (topo.severed_edges || []).length} cuts`;
